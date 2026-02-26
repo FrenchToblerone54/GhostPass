@@ -102,6 +102,17 @@ http://YOUR_SERVER:8090/webhook/cryptomus
 
 ---
 
+## دستورات CLI
+
+```bash
+ghostpass --version          # نمایش نسخه فعلی
+ghostpass update             # بررسی نسخه جدید و اعمال به‌روزرسانی
+```
+
+`ghostpass update` جدیدترین باینری را دانلود می‌کند، چک‌سام SHA-256 آن را تأیید می‌کند، باینری فعلی را جایگزین می‌کند و سرویس systemd را به‌صورت خودکار راه‌اندازی مجدد می‌کند.
+
+---
+
 ## دستورات systemd
 
 ```bash
@@ -123,6 +134,7 @@ sudo journalctl -u ghostpass -f
 | `GHOSTGATE_URL` | ویزارد راه‌اندازی | آدرس کامل پنل GhostGate با مسیر مخفی |
 | `SYNC_INTERVAL` | install.sh | فاصله همگام‌سازی پس‌زمینه بر حسب ثانیه |
 | `AUTO_UPDATE` | install.sh | `true` یا `false` — به‌روزرسانی خودکار باینری هنگام انتشار نسخه جدید |
+| `CHECK_ON_STARTUP` | install.sh | `true` یا `false` — بررسی به‌روزرسانی بلافاصله هنگام راه‌اندازی ربات (نیازمند `AUTO_UPDATE=true`) |
 | `UPDATE_CHECK_INTERVAL` | install.sh | فاصله بررسی به‌روزرسانی بر حسب ثانیه |
 | `DB_PATH` | install.sh | مسیر پایگاه داده SQLite |
 | `LOG_FILE` | install.sh | مسیر فایل لاگ |

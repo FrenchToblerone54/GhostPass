@@ -10,6 +10,7 @@ from pathlib import Path
 logger=logging.getLogger(__name__)
 
 GITHUB_REPO="FrenchToblerone54/GhostPass"
+VERSION="v0.1.5"
 
 class Updater:
     def __init__(self, check_interval=300, check_on_startup=True, http_proxy="", https_proxy=""):
@@ -23,7 +24,7 @@ class Updater:
 
     def get_current_version(self):
         if Path(sys.argv[0]).name=="ghostpass":
-            return "v0.1.4"
+            return VERSION
         return "dev"
 
     async def http_get(self, url, timeout):

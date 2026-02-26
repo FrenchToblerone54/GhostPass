@@ -102,6 +102,17 @@ Toggle via Settings → Request Flow. Users submit a request with optional reaso
 
 ---
 
+## CLI Commands
+
+```bash
+ghostpass --version          # Print current version
+ghostpass update             # Check for a new release and apply it
+```
+
+`ghostpass update` downloads the latest binary, verifies its SHA-256 checksum, replaces the running binary, and restarts the systemd service automatically.
+
+---
+
 ## systemd Commands
 
 ```bash
@@ -123,6 +134,7 @@ sudo journalctl -u ghostpass -f
 | `GHOSTGATE_URL` | first-run wizard | Full GhostGate panel URL with secret path |
 | `SYNC_INTERVAL` | install.sh | Background sync interval in seconds |
 | `AUTO_UPDATE` | install.sh | `true` or `false` — auto-update binary on new releases |
+| `CHECK_ON_STARTUP` | install.sh | `true` or `false` — check for updates immediately on bot start (requires `AUTO_UPDATE=true`) |
 | `UPDATE_CHECK_INTERVAL` | install.sh | How often to check for updates in seconds |
 | `DB_PATH` | install.sh | SQLite database path |
 | `LOG_FILE` | install.sh | Log file path |
