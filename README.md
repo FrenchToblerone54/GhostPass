@@ -9,7 +9,7 @@
 ## Quick Start
 
 ```bash
-wget https://raw.githubusercontent.com/FrenchToblerone54/ghostpass/main/install.sh -O install.sh
+wget https://raw.githubusercontent.com/FrenchToblerone54/ghostpass/main/scripts/install.sh -O install.sh
 chmod +x install.sh
 sudo ./install.sh
 ```
@@ -19,6 +19,7 @@ The script will ask for:
 2. **Admin Telegram User ID** — your numeric Telegram ID
 3. **Language** — `en` (English) or `fa` (Persian/فارسی)
 4. **Bot proxy URL** — optional, leave empty if not needed
+5. **Auto-update** — automatically update the bot binary when new releases are available
 
 Everything else is configured through the bot's first-run setup wizard.
 
@@ -32,7 +33,7 @@ After installation, open Telegram and send `/start` to your bot as the admin. Th
 2. **Support contact** — a @username users can contact for support.
 3. **Card-to-Card payment** — card number and cardholder name (primary payment method for Iranian users).
 4. **Cryptomus** — merchant ID and API key (optional, for crypto payments).
-5. **Currency** — e.g. `IRR`, `USD`, `USDT`.
+5. **Currencies** — configure one or more currencies (e.g. `IRT`, `USD`, `USDT`) with exchange rates and which payment methods accept each currency.
 
 ---
 
@@ -72,7 +73,7 @@ Admins access the full management interface by sending `/start`. The menu is ent
 - **Cryptomus** — toggle, edit merchant ID and API key
 - **Request Flow** — toggle subscription request feature
 - **Support Contact** — update support @username
-- **Currency** — update display currency
+- **Currencies** — add, edit, or remove currencies; set exchange rates and accepted payment methods per currency; set base currency
 - **Sync Interval** — update background sync interval
 
 ---
@@ -81,7 +82,7 @@ Admins access the full management interface by sending `/start`. The menu is ent
 
 ### Card-to-Card (Primary)
 Works with zero other configuration. Users:
-1. Select a plan → see card details
+1. Select a plan → see card details and price in their currency
 2. Send a receipt screenshot
 3. Admin receives the receipt with Confirm/Reject buttons
 4. On confirmation, subscription is created automatically
@@ -120,11 +121,13 @@ sudo journalctl -u ghostpass -f
 | `BOT_PROXY` | install.sh | Optional proxy URL for Telegram API |
 | `LANGUAGE` | install.sh | `en` or `fa` |
 | `GHOSTGATE_URL` | first-run wizard | Full GhostGate panel URL with secret path |
-| `SYNC_INTERVAL` | Settings menu | Background sync interval in seconds |
+| `SYNC_INTERVAL` | install.sh | Background sync interval in seconds |
+| `AUTO_UPDATE` | install.sh | `true` or `false` — auto-update binary on new releases |
+| `UPDATE_CHECK_INTERVAL` | install.sh | How often to check for updates in seconds |
 | `DB_PATH` | install.sh | SQLite database path |
 | `LOG_FILE` | install.sh | Log file path |
 
-Payment credentials (card number, Cryptomus keys) are stored in the SQLite `settings` table and never go in `.env`.
+Payment credentials (card number, Cryptomus keys) and currency configuration are stored in the SQLite `settings` table and never go in `.env`.
 
 ---
 
