@@ -1,0 +1,136 @@
+import logging
+from datetime import datetime, timezone
+from telegram import Update
+from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, ConversationHandler, filters
+import core.db as db
+import core.ghostgate as gg
+from bot.strings import t
+from bot.keyboards import skip_kb, cancel_kb
+from bot.states import REQUEST_REASON
+
+logger = logging.getLogger(__name__)
+
+async def cb_buy_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plan_id = query.data.split(":", 2)[2]
+    plan = await db.get_plan(plan_id)
+    if not plan:
+        await query.edit_message_text(t("order_not_found"))
+        return ConversationHandler.END
+    currency = await db.get_setting("currency", "USD")
+    u = update.effective_user
+    uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    order_id = await db.create_order(uid, plan_id, "request", plan["price"], currency)
+    ctx.user_data["request_order_id"] = order_id
+    await query.edit_message_text(t("reason_prompt"), reply_markup=skip_kb("request:skip_reason"))
+    return REQUEST_REASON
+
+async def handle_reason(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    order_id = ctx.user_data.pop("request_order_id", None)
+    if not order_id:
+        return ConversationHandler.END
+    reason = update.message.text.strip()
+    await _notify_admins(order_id, reason, update, ctx)
+    await update.message.reply_text(t("request_created"))
+    return ConversationHandler.END
+
+async def cb_skip_reason(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    order_id = ctx.user_data.pop("request_order_id", None)
+    if not order_id:
+        return ConversationHandler.END
+    await _notify_admins(order_id, "", update, ctx)
+    await query.edit_message_text(t("request_created"))
+    return ConversationHandler.END
+
+async def _notify_admins(order_id, reason, update, ctx):
+    order = await db.get_order(order_id)
+    if not order:
+        return
+    plan = await db.get_plan(order["plan_id"])
+    u = update.effective_user
+    caption = t(
+        "request_caption",
+        first_name=u.first_name or "",
+        username=f"@{u.username}" if u.username else str(u.id),
+        telegram_id=u.id,
+        plan_name=plan["name"] if plan else order["plan_id"],
+        reason=reason or t("request_no_reason")
+    )
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+    from config import settings
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Approve", callback_data=f"req:approve:{order_id}"),
+        InlineKeyboardButton("❌ Decline", callback_data=f"req:decline:{order_id}"),
+    ]])
+    admin_ids = await db.get_all_admin_ids(settings.ADMIN_ID)
+    for admin_id in admin_ids:
+        try:
+            await ctx.bot.send_message(admin_id, caption, reply_markup=kb)
+        except Exception as e:
+            logger.error("Failed to notify admin %s: %s", admin_id, e)
+
+async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    order_id = query.data.split(":", 2)[2]
+    order = await db.get_order(order_id)
+    if not order or order["status"]!="pending":
+        await query.edit_message_text("Already processed.")
+        return
+    plan = await db.get_plan(order["plan_id"])
+    user = await db.get_user_by_id(order["user_id"])
+    if not plan or not user:
+        return
+    result = await gg.create_subscription(
+        comment=user.get("first_name") or str(user["telegram_id"]),
+        data_gb=plan["data_gb"],
+        days=plan["days"],
+        ip_limit=plan["ip_limit"],
+        node_ids=plan["node_ids"]
+    )
+    if not result:
+        await query.edit_message_text(t("ghostgate_error"))
+        return
+    sub_id = result.get("id")
+    sub_url = result.get("url", "")
+    now = datetime.now(timezone.utc).isoformat()
+    await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=now)
+    await query.edit_message_text(f"{query.message.text}\n\n✅ Approved", reply_markup=None)
+    qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
+    if qr_bytes:
+        import io
+        await ctx.bot.send_photo(user["telegram_id"], photo=io.BytesIO(qr_bytes), caption=t("request_approved", url=sub_url), parse_mode="Markdown")
+    else:
+        await ctx.bot.send_message(user["telegram_id"], t("request_approved", url=sub_url), parse_mode="Markdown")
+
+async def cb_decline_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    order_id = query.data.split(":", 2)[2]
+    order = await db.get_order(order_id)
+    if not order or order["status"]!="pending":
+        await query.edit_message_text("Already processed.")
+        return
+    await db.update_order(order_id, status="rejected")
+    user = await db.get_user_by_id(order["user_id"])
+    if user:
+        await ctx.bot.send_message(user["telegram_id"], t("request_declined"))
+    await query.edit_message_text(f"{query.message.text}\n\n❌ Declined", reply_markup=None)
+
+def get_request_conv_handler():
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_buy_request, pattern=r"^buy:request:")],
+        states={REQUEST_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reason)]},
+        fallbacks=[CallbackQueryHandler(cb_skip_reason, pattern=r"^request:skip_reason$")],
+        per_message=False
+    )
+
+def get_handlers():
+    return [
+        get_request_conv_handler(),
+        CallbackQueryHandler(cb_approve_request, pattern=r"^req:approve:"),
+        CallbackQueryHandler(cb_decline_request, pattern=r"^req:decline:"),
+    ]
