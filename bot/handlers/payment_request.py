@@ -1,9 +1,10 @@
 import logging
 from datetime import datetime, timezone
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, ConversationHandler, filters
 import core.db as db
 import core.ghostgate as gg
+from core.currency import price_for_method, fmt
 from bot.strings import t
 from bot.keyboards import skip_kb, cancel_kb
 from bot.states import REQUEST_REASON
@@ -18,10 +19,10 @@ async def cb_buy_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not plan:
         await query.edit_message_text(t("order_not_found"))
         return ConversationHandler.END
-    currency = await db.get_setting("currency", "USD")
+    amount, code, decimals = await price_for_method(plan["price"], "request")
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
-    order_id = await db.create_order(uid, plan_id, "request", plan["price"], currency)
+    order_id = await db.create_order(uid, plan_id, "request", float(amount), code)
     ctx.user_data["request_order_id"] = order_id
     await query.edit_message_text(t("reason_prompt"), reply_markup=skip_kb("request:skip_reason"))
     return REQUEST_REASON
@@ -30,8 +31,7 @@ async def handle_reason(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     order_id = ctx.user_data.pop("request_order_id", None)
     if not order_id:
         return ConversationHandler.END
-    reason = update.message.text.strip()
-    await _notify_admins(order_id, reason, update, ctx)
+    await _notify_admins(order_id, update.message.text.strip(), update, ctx)
     await update.message.reply_text(t("request_created"))
     return ConversationHandler.END
 
@@ -59,12 +59,11 @@ async def _notify_admins(order_id, reason, update, ctx):
         plan_name=plan["name"] if plan else order["plan_id"],
         reason=reason or t("request_no_reason")
     )
-    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-    from config import settings
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Approve", callback_data=f"req:approve:{order_id}"),
         InlineKeyboardButton("❌ Decline", callback_data=f"req:decline:{order_id}"),
     ]])
+    from config import settings
     admin_ids = await db.get_all_admin_ids(settings.ADMIN_ID)
     for admin_id in admin_ids:
         try:
@@ -96,8 +95,7 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     sub_id = result.get("id")
     sub_url = result.get("url", "")
-    now = datetime.now(timezone.utc).isoformat()
-    await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=now)
+    await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
     await query.edit_message_text(f"{query.message.text}\n\n✅ Approved", reply_markup=None)
     qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
     if qr_bytes:

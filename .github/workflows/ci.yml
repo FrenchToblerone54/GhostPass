@@ -22,4 +22,30 @@ jobs:
           python -m py_compile bot/app.py bot/menus.py bot/keyboards.py bot/states.py bot/strings.py
           python -m py_compile bot/handlers/admin.py bot/handlers/consumer.py
           python -m py_compile bot/handlers/payment_card.py bot/handlers/payment_crypto.py bot/handlers/payment_request.py
-          python -m py_compile core/db.py core/ghostgate.py core/sync.py
+          python -m py_compile core/db.py core/ghostgate.py core/sync.py core/currency.py core/updater.py
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Ensure python3.13 alias
+        run: |
+          if ! command -v python3.13 >/dev/null 2>&1; then
+            sudo ln -sf "$(which python)" /usr/local/bin/python3.13
+          fi
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Build
+        run: |
+          bash build/build.sh
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghostpass-linux
+          path: |
+            dist/ghostpass
+            dist/ghostpass.sha256

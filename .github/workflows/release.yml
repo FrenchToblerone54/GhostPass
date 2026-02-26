@@ -16,33 +16,29 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - name: Ensure python3.13 alias
+        run: |
+          if ! command -v python3.13 >/dev/null 2>&1; then
+            sudo ln -sf "$(which python)" /usr/local/bin/python3.13
+          fi
       - name: Normalize version input
         id: ver
         run: |
           ver="${{ inputs.version }}"
           ver="${ver#v}"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
-      - name: Verify version matches version.py
-        run: |
-          v="$(python -c 'import re, pathlib; txt=pathlib.Path("version.py").read_text(); m=re.search(r"^VERSION\s*=\s*\"([^\"]+)\"", txt, re.M); print(m.group(1) if m else "")')"
-          if [ "$v" != "${{ steps.ver.outputs.version }}" ]; then
-            echo "version.py VERSION=$v does not match input version=${{ inputs.version }}"
-            exit 1
-          fi
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-      - name: Syntax check
+      - name: Build
         run: |
-          python -m py_compile config.py main.py version.py
-          python -m py_compile bot/app.py bot/menus.py bot/keyboards.py bot/states.py bot/strings.py
-          python -m py_compile bot/handlers/admin.py bot/handlers/consumer.py
-          python -m py_compile bot/handlers/payment_card.py bot/handlers/payment_crypto.py bot/handlers/payment_request.py
-          python -m py_compile core/db.py core/ghostgate.py core/sync.py
+          bash build/build.sh
       - name: Create release
         uses: ncipollo/release-action@v1
         with:
           tag: v${{ steps.ver.outputs.version }}
           name: v${{ steps.ver.outputs.version }}
+          artifacts: dist/ghostpass,dist/ghostpass.sha256
+          allowUpdates: true
           generateReleaseNotes: true

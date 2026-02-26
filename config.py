@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     GHOSTGATE_URL: str = ""
     SYNC_INTERVAL: int = 60
     LANGUAGE: str = "en"
+    AUTO_UPDATE: bool = True
+    UPDATE_CHECK_INTERVAL: int = 300
     DB_PATH: str = "/opt/ghostpass/ghostpass.db"
     LOG_FILE: str = "/var/log/ghostpass.log"
 

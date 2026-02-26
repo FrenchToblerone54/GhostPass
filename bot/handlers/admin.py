@@ -1,6 +1,7 @@
 import logging
 import io
 from datetime import datetime, timezone
+from decimal import Decimal
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ContextTypes, CommandHandler, CallbackQueryHandler,
@@ -8,10 +9,15 @@ from telegram.ext import (
 )
 import core.db as db
 import core.ghostgate as gg
+from core.currency import (
+    get_currencies, save_currencies, get_base_currency, set_base_currency,
+    convert, fmt as cfmt
+)
 from bot.keyboards import (
     main_admin_kb, settings_kb, back_kb, plan_actions_kb,
     user_actions_kb, sub_actions_kb, node_select_kb,
-    order_detail_kb, skip_kb, cancel_kb
+    order_detail_kb, skip_kb, cancel_kb, currencies_kb,
+    method_select_kb, curr_detail_kb, base_select_kb
 )
 from bot.strings import t
 from bot.states import (
@@ -25,9 +31,10 @@ from bot.states import (
     ADMIN_MANUAL_SUB_IP, ADMIN_MANUAL_SUB_NODES,
     SETTINGS_CARD_NUM, SETTINGS_CARD_NAME,
     SETTINGS_CRYPTO_MID, SETTINGS_CRYPTO_KEY,
-    SETTINGS_SUPPORT, SETTINGS_CURRENCY, SETTINGS_SYNC, SETTINGS_GG_URL,
+    SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL,
     USER_SEARCH, SUB_SEARCH,
-    ADMIN_BROADCAST
+    ADMIN_REJECT_REASON,
+    CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE
 )
 from config import settings
 
@@ -36,16 +43,10 @@ logger = logging.getLogger(__name__)
 async def _is_admin(telegram_id):
     return await db.is_admin(telegram_id, settings.ADMIN_ID)
 
-async def _require_admin(update):
-    if not await _is_admin(update.effective_user.id):
-        return False
-    return True
-
 async def cmd_start_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if not await _require_admin(update):
-        return
-    gg_url = settings.GHOSTGATE_URL
-    if not gg_url:
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    if not settings.GHOSTGATE_URL:
         await update.message.reply_text(t("wizard_step1"), parse_mode="Markdown")
         return WIZARD_URL
     await update.message.reply_text(t("admin_menu_title"), reply_markup=main_admin_kb(), parse_mode="Markdown")
@@ -121,13 +122,13 @@ async def wizard_skip_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return WIZARD_CURRENCY
 
 async def wizard_currency(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    currency = update.message.text.strip()
-    await _wizard_save(ctx, currency, update)
+    currency = update.message.text.strip().upper()
+    await _wizard_save(ctx, currency)
     await update.message.reply_text(t("wizard_done"))
     await update.message.reply_text(t("admin_menu_title"), reply_markup=main_admin_kb(), parse_mode="Markdown")
     return ConversationHandler.END
 
-async def _wizard_save(ctx, currency, update):
+async def _wizard_save(ctx, base_currency):
     url = ctx.user_data.get("wizard_url", "")
     support = ctx.user_data.get("wizard_support", "")
     card_num = ctx.user_data.get("wizard_card_num", "")
@@ -138,7 +139,9 @@ async def _wizard_save(ctx, currency, update):
     dotenv_set("/opt/ghostpass/.env", "GHOSTGATE_URL", url)
     settings.GHOSTGATE_URL = url
     await db.set_setting("support_username", support)
-    await db.set_setting("currency", currency)
+    await set_base_currency(base_currency)
+    default_currencies = [{"code": base_currency, "name": base_currency, "decimals": 0, "methods": ["card", "request"], "rate": "1"}]
+    await save_currencies(default_currencies)
     if card_num:
         await db.set_setting("card_number", card_num)
         await db.set_setting("card_holder", card_name)
@@ -159,21 +162,20 @@ async def cb_adm_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     plans = await db.list_plans(active_only=False)
+    base = await get_base_currency()
     if not plans:
-        rows = [[InlineKeyboardButton("➕ Create Plan", callback_data="plan:create")]]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:back")])
+        rows = [[InlineKeyboardButton("➕ Create Plan", callback_data="plan:create")], [InlineKeyboardButton("⬅️ Back", callback_data="adm:back")]]
         await query.edit_message_text(t("no_plans_admin"), reply_markup=InlineKeyboardMarkup(rows))
         return
-    currency = await db.get_setting("currency", "USD")
     rows = []
     for p in plans:
         status = "✅" if p["is_active"] else "❌"
-        rows.append([InlineKeyboardButton(f"{status} {p['name']} — {p['price']} {currency}", callback_data=f"plan:detail:{p['id']}")])
+        rows.append([InlineKeyboardButton(f"{status} {p['name']} — {p['price']} {base}", callback_data=f"plan:detail:{p['id']}")])
     rows.append([InlineKeyboardButton("➕ Create Plan", callback_data="plan:create")])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:back")])
     await query.edit_message_text(t("plans_title"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
-async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cb_plan_detail_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     plan_id = query.data.split(":", 2)[2]
@@ -181,11 +183,11 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not plan:
         await query.edit_message_text(t("order_not_found"))
         return
-    currency = await db.get_setting("currency", "USD")
+    base = await get_base_currency()
     text = (
         f"📦 *{plan['name']}*\n"
-        f"💾 {plan['data_gb']} GB / 📅 {plan['days']} days / 📱 {plan['ip_limit']} IPs\n"
-        f"💰 {plan['price']} {currency}\n"
+        f"💾 {plan['data_gb']} GB / 📅 {plan['days']}d / 📱 {plan['ip_limit']} IPs\n"
+        f"💰 {plan['price']} {base}\n"
         f"🔗 Nodes: {len(plan['node_ids'])}\n"
         f"Status: {'✅ Active' if plan['is_active'] else '❌ Inactive'}"
     )
@@ -199,7 +201,7 @@ async def cb_plan_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not plan:
         return
     await db.update_plan(plan_id, is_active=0 if plan["is_active"] else 1)
-    await cb_plan_detail(update, ctx)
+    await cb_plan_detail_admin(update, ctx)
 
 async def cb_plan_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -209,6 +211,8 @@ async def cb_plan_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(t("plan_deleted"), reply_markup=back_kb("adm:plans"))
 
 async def cb_plan_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("📦 *Create Plan*\n\nEnter plan name:", parse_mode="Markdown", reply_markup=cancel_kb())
@@ -243,7 +247,8 @@ async def plan_get_ip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(t("invalid_input"))
         return PLAN_CREATE_IP
-    await update.message.reply_text("Enter price (e.g. 50000):", reply_markup=cancel_kb())
+    base = await get_base_currency()
+    await update.message.reply_text(t("plan_price_enter", base=base), reply_markup=cancel_kb())
     return PLAN_CREATE_PRICE
 
 async def plan_get_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -279,7 +284,7 @@ async def plan_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def plan_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    plan_id = await db.create_plan(
+    await db.create_plan(
         name=ctx.user_data["plan_name"],
         data_gb=ctx.user_data["plan_data"],
         days=ctx.user_data["plan_days"],
@@ -293,19 +298,21 @@ async def plan_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def cb_plan_edit_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    plan_id = query.data.split(":", 2)[2]
-    ctx.user_data["editing_plan_id"] = plan_id
+    ctx.user_data["editing_plan_id"] = query.data.split(":", 2)[2]
     ctx.user_data["editing_plan_field"] = "price"
     await query.edit_message_text("Enter new price:", reply_markup=cancel_kb())
     return PLAN_EDIT_VALUE
 
 async def cb_plan_edit_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    plan_id = query.data.split(":", 2)[2]
-    ctx.user_data["editing_plan_id"] = plan_id
+    ctx.user_data["editing_plan_id"] = query.data.split(":", 2)[2]
     ctx.user_data["editing_plan_field"] = "name"
     await query.edit_message_text("Enter new name:", reply_markup=cancel_kb())
     return PLAN_EDIT_VALUE
@@ -335,10 +342,7 @@ async def cb_adm_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     per_page = 10
     start = page*per_page
     page_subs = subs[start:start+per_page]
-    rows = []
-    for s in page_subs:
-        label = s.get("comment") or s["id"][:8]
-        rows.append([InlineKeyboardButton(label, callback_data=f"sub:detail:{s['id']}")])
+    rows = [[InlineKeyboardButton(s.get("comment") or s["id"][:8], callback_data=f"sub:detail:{s['id']}")] for s in page_subs]
     nav = []
     if page>0:
         nav.append(InlineKeyboardButton("◀️", callback_data="subs_page:prev"))
@@ -391,6 +395,8 @@ async def cb_sub_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(t("sub_deleted"), reply_markup=back_kb("adm:subs"))
 
 async def cb_sub_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Enter subscription comment (username or name):", reply_markup=cancel_kb())
@@ -477,34 +483,31 @@ async def cb_subs_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_adm_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    rows = [
-        [InlineKeyboardButton("🔍 Search user", callback_data="users:search")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="adm:back")],
-    ]
     users, total = await db.list_users(limit=5)
     text = f"👥 *Users* ({total} total)\n\nRecent users:\n"
     for u in users:
         uname = f"@{u['username']}" if u.get("username") else str(u["telegram_id"])
         text += f"• {u.get('first_name') or ''} {uname}\n"
+    rows = [[InlineKeyboardButton("🔍 Search user", callback_data="users:search")], [InlineKeyboardButton("⬅️ Back", callback_data="adm:back")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_users_search_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Enter user ID or @username to search:", reply_markup=cancel_kb())
     return USER_SEARCH
 
 async def users_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query_str = update.message.text.strip().lstrip("@")
-    results = await db.search_users(query_str)
+    results = await db.search_users(update.message.text.strip().lstrip("@"))
     if not results:
         await update.message.reply_text("No users found.", reply_markup=back_kb("adm:users"))
         return ConversationHandler.END
     rows = []
     for u in results:
         uname = f"@{u['username']}" if u.get("username") else str(u["telegram_id"])
-        label = f"{u.get('first_name') or ''} {uname}".strip()
-        rows.append([InlineKeyboardButton(label, callback_data=f"user:detail:{u['id']}")])
+        rows.append([InlineKeyboardButton(f"{u.get('first_name') or ''} {uname}".strip(), callback_data=f"user:detail:{u['id']}")])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:users")])
     await update.message.reply_text("Search results:", reply_markup=InlineKeyboardMarkup(rows))
     return ConversationHandler.END
@@ -554,39 +557,32 @@ async def cb_user_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not orders:
         await query.edit_message_text("No orders found.", reply_markup=back_kb(f"user:detail:{uid}"))
         return
-    rows = []
-    for o in orders:
-        label = f"{o['plan_name']} — {o['status']} — {o['created_at'][:10]}"
-        rows.append([InlineKeyboardButton(label, callback_data=f"order:detail:{o['id']}")])
+    rows = [[InlineKeyboardButton(f"{o['plan_name']} — {o['status']} — {o['created_at'][:10]}", callback_data=f"order:detail:{o['id']}")] for o in orders]
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"user:detail:{uid}")])
     await query.edit_message_text("📋 User orders:", reply_markup=InlineKeyboardMarkup(rows))
 
 async def cb_adm_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    pending = await db.get_pending_orders()
     rows = [
         [InlineKeyboardButton("⏳ Pending/Waiting", callback_data="orders:list:waiting_confirm")],
         [InlineKeyboardButton("✅ Paid", callback_data="orders:list:paid")],
         [InlineKeyboardButton("❌ Rejected", callback_data="orders:list:rejected")],
         [InlineKeyboardButton("⬅️ Back", callback_data="adm:back")],
     ]
-    pending = await db.get_pending_orders()
     await query.edit_message_text(f"💰 *Orders*\n\n⏳ Pending: {len(pending)}", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_orders_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     status = query.data.split(":", 2)[2]
-    orders, total = await db.list_orders(status=status if status!="waiting_confirm" else None, limit=20)
+    orders, total = await db.list_orders(status=None if status=="waiting_confirm" else status, limit=20)
     if status=="waiting_confirm":
         orders = [o for o in orders if o["status"] in ("pending", "waiting_confirm")]
-        total = len(orders)
-    rows = []
-    for o in orders[:20]:
-        label = f"{o.get('plan_name','?')} — {o.get('first_name','?')} — {o['status']}"
-        rows.append([InlineKeyboardButton(label, callback_data=f"order:detail:{o['id']}")])
+    rows = [[InlineKeyboardButton(f"{o.get('plan_name','?')} — {o.get('first_name','?')} — {o['status']}", callback_data=f"order:detail:{o['id']}")] for o in orders[:20]]
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:orders")])
-    await query.edit_message_text(f"Orders ({total}):", reply_markup=InlineKeyboardMarkup(rows))
+    await query.edit_message_text(f"Orders ({len(orders)}):", reply_markup=InlineKeyboardMarkup(rows))
 
 async def cb_order_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -600,33 +596,105 @@ async def cb_order_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     plan = await db.get_plan(order["plan_id"])
     uname = f"@{user['username']}" if user and user.get("username") else str(user["telegram_id"] if user else "?")
     text = (
-        f"💰 *Order*\n"
-        f"ID: `{order_id}`\n"
-        f"User: {uname}\n"
-        f"Plan: {plan['name'] if plan else '?'}\n"
-        f"Amount: {order['amount']} {order['currency']}\n"
-        f"Method: {order['payment_method']}\n"
-        f"Status: {order['status']}\n"
-        f"Created: {order['created_at'][:16]}"
+        f"💰 *Order*\nID: `{order_id}`\nUser: {uname}\n"
+        f"Plan: {plan['name'] if plan else '?'}\nAmount: {order['amount']} {order['currency']}\n"
+        f"Method: {order['payment_method']}\nStatus: {order['status']}\nCreated: {order['created_at'][:16]}"
     )
     if order.get("receipt_file_id") and order["status"] in ("pending", "waiting_confirm"):
         await query.message.reply_photo(order["receipt_file_id"])
     await query.edit_message_text(text, reply_markup=order_detail_kb(order_id, order["status"], "adm:orders"), parse_mode="Markdown")
 
+async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    order_id = query.data.split(":", 2)[2]
+    order = await db.get_order(order_id)
+    if not order or order["status"] not in ("pending", "waiting_confirm"):
+        await query.answer("Already processed.", show_alert=True)
+        return
+    plan = await db.get_plan(order["plan_id"])
+    user = await db.get_user_by_id(order["user_id"])
+    if not plan or not user:
+        return
+    result = await gg.create_subscription(
+        comment=user.get("first_name") or str(user["telegram_id"]),
+        data_gb=plan["data_gb"],
+        days=plan["days"],
+        ip_limit=plan["ip_limit"],
+        node_ids=plan["node_ids"]
+    )
+    if not result:
+        await query.edit_message_text(t("ghostgate_error"))
+        return
+    sub_id = result.get("id")
+    sub_url = result.get("url", "")
+    await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
+    admin_name = update.effective_user.first_name or str(update.effective_user.id)
+    try:
+        await query.edit_message_caption(caption=f"{query.message.caption or ''}\n\n{t('admin_confirmed', admin=admin_name, sub_id=sub_id)}", reply_markup=None)
+    except Exception:
+        await query.edit_message_text(t("admin_confirmed", admin=admin_name, sub_id=sub_id), reply_markup=None)
+    qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
+    if qr_bytes:
+        await ctx.bot.send_photo(user["telegram_id"], photo=io.BytesIO(qr_bytes), caption=t("sub_confirmed", url=sub_url), parse_mode="Markdown")
+    else:
+        await ctx.bot.send_message(user["telegram_id"], t("sub_confirmed", url=sub_url), parse_mode="Markdown")
+
+async def cb_reject_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    order_id = query.data.split(":", 2)[2]
+    ctx.user_data["rejecting_order_id"] = order_id
+    await query.message.reply_text(t("reject_reason_prompt"), reply_markup=skip_kb("reject:skip"))
+    return ADMIN_REJECT_REASON
+
+async def handle_reject_reason(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    order_id = ctx.user_data.pop("rejecting_order_id", None)
+    if not order_id:
+        return ConversationHandler.END
+    await _do_reject(order_id, update.message.text.strip(), update, ctx)
+    return ConversationHandler.END
+
+async def cb_reject_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    order_id = ctx.user_data.pop("rejecting_order_id", None)
+    if not order_id:
+        return ConversationHandler.END
+    await _do_reject(order_id, "", update, ctx)
+    return ConversationHandler.END
+
+async def _do_reject(order_id, reason, update, ctx):
+    order = await db.get_order(order_id)
+    if not order:
+        return
+    await db.update_order(order_id, status="rejected")
+    user = await db.get_user_by_id(order["user_id"])
+    if user:
+        if reason:
+            await ctx.bot.send_message(user["telegram_id"], t("reject_notif", reason=reason))
+        else:
+            await ctx.bot.send_message(user["telegram_id"], t("sub_rejected"))
+    admin_name = update.effective_user.first_name or str(update.effective_user.id)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(t("admin_rejected", admin=admin_name), reply_markup=None)
+    else:
+        await update.message.reply_text(t("admin_rejected", admin=admin_name))
+
 async def cb_adm_admins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     admins = await db.list_admins()
-    rows = []
-    for a in admins:
-        perms = ", ".join(a.get("permissions", ["view"]) if isinstance(a.get("permissions"), list) else [a.get("permissions", "view")])
-        rows.append([InlineKeyboardButton(f"👑 {a['telegram_id']} — {perms[:20]}", callback_data=f"admin:detail:{a['telegram_id']}")])
+    rows = [[InlineKeyboardButton(f"👑 {a['telegram_id']}", callback_data=f"admin:detail:{a['telegram_id']}")] for a in admins]
     rows.append([InlineKeyboardButton("➕ Add Admin", callback_data="admin:add")])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:back")])
-    text = f"👑 *Admins*\nRoot: `{settings.ADMIN_ID}`"
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    await query.edit_message_text(f"👑 *Admins*\nRoot: `{settings.ADMIN_ID}`", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_admin_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Enter Telegram user ID of the new admin:", reply_markup=cancel_kb())
@@ -676,6 +744,8 @@ async def cb_adm_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("⚙️ *Settings*", reply_markup=settings_kb(), parse_mode="Markdown")
 
 async def cb_set_gg_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     current = settings.GHOSTGATE_URL or "(not set)"
@@ -720,6 +790,8 @@ async def cb_card_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await cb_set_card(update, ctx)
 
 async def cb_set_card_num(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Enter new card number:", reply_markup=cancel_kb())
@@ -731,6 +803,8 @@ async def settings_card_num(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def cb_set_card_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Enter cardholder name:", reply_markup=cancel_kb())
@@ -762,6 +836,8 @@ async def cb_crypto_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await cb_set_crypto(update, ctx)
 
 async def cb_set_crypto_mid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Enter Cryptomus Merchant ID:", reply_markup=cancel_kb())
@@ -773,6 +849,8 @@ async def settings_crypto_mid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def cb_set_crypto_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Enter Cryptomus API Key:", reply_markup=cancel_kb())
@@ -801,6 +879,8 @@ async def cb_req_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await cb_set_requests(update, ctx)
 
 async def cb_set_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     current = await db.get_setting("support_username", "(not set)")
@@ -812,23 +892,12 @@ async def settings_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
 
-async def cb_set_currency(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    current = await db.get_setting("currency", "USD")
-    await query.edit_message_text(f"Current: {current}\n\nEnter currency (IRR, USD, USDT...):", reply_markup=cancel_kb())
-    return SETTINGS_CURRENCY
-
-async def settings_currency(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await db.set_setting("currency", update.message.text.strip())
-    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
-    return ConversationHandler.END
-
 async def cb_set_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    current = settings.SYNC_INTERVAL
-    await query.edit_message_text(f"Current: {current}s\n\nEnter sync interval in seconds:", reply_markup=cancel_kb())
+    await query.edit_message_text(f"Current: {settings.SYNC_INTERVAL}s\n\nEnter sync interval in seconds:", reply_markup=cancel_kb())
     return SETTINGS_SYNC
 
 async def settings_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -843,13 +912,179 @@ async def settings_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
 
-async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cb_set_currencies(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("❌ Cancelled.", reply_markup=back_kb("adm:back"))
+    currencies = await get_currencies()
+    base = await get_base_currency()
+    if not currencies:
+        rows = [[InlineKeyboardButton("➕ Add Currency", callback_data="curr:add"), InlineKeyboardButton("📌 Set Base", callback_data="curr:set_base")]]
+        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:settings")])
+        await query.edit_message_text(t("curr_no_currencies", base=base), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+        return
+    await query.edit_message_text(t("curr_title", base=base), reply_markup=currencies_kb(currencies, base, "adm:settings"), parse_mode="Markdown")
+
+async def cb_curr_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":", 2)[2]
+    currencies = await get_currencies()
+    base = await get_base_currency()
+    c = next((x for x in currencies if x["code"]==code), None)
+    if not c:
+        await query.edit_message_text("Currency not found.")
+        return
+    methods_str = ", ".join(c.get("methods", [])) or "-"
+    rate_str = c.get("rate", "1")
+    text = t("curr_detail", code=c["code"], name=c["name"], decimals=c.get("decimals", 0), methods=methods_str, base=base, rate=rate_str)
+    await query.edit_message_text(text, reply_markup=curr_detail_kb(code, code==base, "set:currencies"), parse_mode="Markdown")
+
+async def cb_curr_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":", 2)[2]
+    currencies = await get_currencies()
+    currencies = [c for c in currencies if c["code"]!=code]
+    await save_currencies(currencies)
+    await query.edit_message_text(t("curr_deleted"), reply_markup=back_kb("set:currencies"))
+
+async def cb_curr_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("curr_add_code"), reply_markup=cancel_kb())
+    return CURR_ADD_CODE
+
+async def curr_add_code(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["new_curr_code"] = update.message.text.strip().upper()
+    await update.message.reply_text(t("curr_add_name"), reply_markup=cancel_kb())
+    return CURR_ADD_NAME
+
+async def curr_add_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["new_curr_name"] = update.message.text.strip()
+    await update.message.reply_text(t("curr_add_decimals"), reply_markup=cancel_kb())
+    return CURR_ADD_DECIMALS
+
+async def curr_add_decimals(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        ctx.user_data["new_curr_decimals"] = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return CURR_ADD_DECIMALS
+    ctx.user_data["new_curr_methods"] = []
+    kb = method_select_kb([], "curr:methods_done", "cancel")
+    await update.message.reply_text(t("curr_add_methods"), reply_markup=kb)
+    return CURR_ADD_METHODS
+
+async def curr_toggle_method(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    method = query.data.split(":", 1)[1]
+    selected = ctx.user_data.get("new_curr_methods", [])
+    if method in selected:
+        selected.remove(method)
+    else:
+        selected.append(method)
+    ctx.user_data["new_curr_methods"] = selected
+    kb = method_select_kb(selected, "curr:methods_done", "cancel")
+    await query.edit_message_reply_markup(reply_markup=kb)
+    return CURR_ADD_METHODS
+
+async def curr_methods_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    code = ctx.user_data.get("new_curr_code", "")
+    base = await get_base_currency()
+    currencies = await get_currencies()
+    if not currencies or code==base:
+        await _save_new_currency(ctx, "1")
+        await query.edit_message_text(t("curr_added", code=code), reply_markup=back_kb("set:currencies"))
+        return ConversationHandler.END
+    await query.edit_message_text(t("curr_add_rate_prompt", code=code, base=base), reply_markup=cancel_kb())
+    return CURR_ADD_RATE
+
+async def curr_add_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    code = ctx.user_data.get("new_curr_code", "")
+    try:
+        exchange = Decimal(update.message.text.strip().replace(",", ""))
+        if exchange<=0:
+            raise ValueError
+        rate = str(Decimal("1")/exchange)
+    except Exception:
+        await update.message.reply_text(t("invalid_input"))
+        return CURR_ADD_RATE
+    await _save_new_currency(ctx, rate)
+    await update.message.reply_text(t("curr_added", code=code), reply_markup=back_kb("set:currencies"))
     return ConversationHandler.END
 
+async def _save_new_currency(ctx, rate):
+    code = ctx.user_data.pop("new_curr_code", "")
+    name = ctx.user_data.pop("new_curr_name", code)
+    decimals = ctx.user_data.pop("new_curr_decimals", 2)
+    methods = ctx.user_data.pop("new_curr_methods", [])
+    currencies = await get_currencies()
+    currencies = [c for c in currencies if c["code"]!=code]
+    currencies.append({"code": code, "name": name, "decimals": decimals, "methods": methods, "rate": rate})
+    await save_currencies(currencies)
+
+async def cb_curr_edit_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":", 2)[2]
+    base = await get_base_currency()
+    ctx.user_data["editing_curr_code"] = code
+    await query.edit_message_text(t("curr_add_rate_prompt", code=code, base=base), reply_markup=cancel_kb())
+    return CURR_EDIT_RATE
+
+async def curr_edit_rate_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    code = ctx.user_data.pop("editing_curr_code", None)
+    if not code:
+        return ConversationHandler.END
+    try:
+        exchange = Decimal(update.message.text.strip().replace(",", ""))
+        if exchange<=0:
+            raise ValueError
+        rate = str(Decimal("1")/exchange)
+    except Exception:
+        await update.message.reply_text(t("invalid_input"))
+        return CURR_EDIT_RATE
+    currencies = await get_currencies()
+    for c in currencies:
+        if c["code"]==code:
+            c["rate"] = rate
+            break
+    await save_currencies(currencies)
+    await update.message.reply_text(t("curr_rate_updated"), reply_markup=back_kb("set:currencies"))
+    return ConversationHandler.END
+
+async def cb_curr_set_base_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    currencies = await get_currencies()
+    if not currencies:
+        await query.answer("No currencies configured.", show_alert=True)
+        return
+    await query.edit_message_text(t("curr_set_base_prompt"), reply_markup=base_select_kb(currencies, "set:currencies"))
+
+async def cb_curr_make_base(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":", 2)[2]
+    await set_base_currency(code)
+    currencies = await get_currencies()
+    for c in currencies:
+        if c["code"]==code:
+            c["rate"] = "1"
+            break
+    await save_currencies(currencies)
+    await query.edit_message_text(t("curr_base_set", code=code), reply_markup=back_kb("set:currencies"))
+
 async def cb_subs_search_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
     query = update.callback_query
     await query.answer()
     await query.edit_message_text("Enter subscription ID or comment to search:", reply_markup=cancel_kb())
@@ -862,53 +1097,38 @@ async def subs_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not results:
         await update.message.reply_text("No subscriptions found.", reply_markup=back_kb("adm:subs"))
         return ConversationHandler.END
-    rows = []
-    for s in results[:20]:
-        label = s.get("comment") or s["id"][:12]
-        rows.append([InlineKeyboardButton(label, callback_data=f"sub:detail:{s['id']}")])
+    rows = [[InlineKeyboardButton(s.get("comment") or s["id"][:12], callback_data=f"sub:detail:{s['id']}")] for s in results[:20]]
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:subs")])
     await update.message.reply_text("Search results:", reply_markup=InlineKeyboardMarkup(rows))
     return ConversationHandler.END
 
-def _admin_filter():
-    async def _f(update, ctx):
-        return await _is_admin(update.effective_user.id) if update.effective_user else False
-    from telegram.ext import filters as tfilters
-    return tfilters.UpdateFilter(_f)
+async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    for k in ("plan_name", "plan_data", "plan_days", "plan_ip", "plan_price", "plan_nodes",
+              "msub_comment", "msub_data", "msub_days", "msub_ip", "msub_nodes",
+              "new_admin_id", "editing_plan_id", "editing_plan_field",
+              "new_curr_code", "new_curr_name", "new_curr_decimals", "new_curr_methods", "editing_curr_code",
+              "rejecting_order_id", "pending_order_id", "request_order_id"):
+        ctx.user_data.pop(k, None)
+    await query.edit_message_text("❌ Cancelled.", reply_markup=back_kb("adm:back"))
+    return ConversationHandler.END
 
 def get_main_conv_handler():
-    wizard_states = {
+    states = {
         WIZARD_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_url)],
-        WIZARD_SUPPORT: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_support),
-            CallbackQueryHandler(wizard_skip_support, pattern=r"^wizard:skip_support$"),
-        ],
-        WIZARD_CARD_NUM: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_card_num),
-            CallbackQueryHandler(wizard_skip_card, pattern=r"^wizard:skip_card$"),
-        ],
-        WIZARD_CARD_NAME: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_card_name),
-            CallbackQueryHandler(wizard_skip_card_name, pattern=r"^wizard:skip_card_name$"),
-        ],
-        WIZARD_CRYPTO_MID: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_crypto_mid),
-            CallbackQueryHandler(wizard_skip_crypto, pattern=r"^wizard:skip_crypto$"),
-        ],
-        WIZARD_CRYPTO_KEY: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_crypto_key),
-            CallbackQueryHandler(wizard_skip_crypto, pattern=r"^wizard:skip_crypto$"),
-        ],
+        WIZARD_SUPPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_support), CallbackQueryHandler(wizard_skip_support, pattern=r"^wizard:skip_support$")],
+        WIZARD_CARD_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_card_num), CallbackQueryHandler(wizard_skip_card, pattern=r"^wizard:skip_card$")],
+        WIZARD_CARD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_card_name), CallbackQueryHandler(wizard_skip_card_name, pattern=r"^wizard:skip_card_name$")],
+        WIZARD_CRYPTO_MID: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_crypto_mid), CallbackQueryHandler(wizard_skip_crypto, pattern=r"^wizard:skip_crypto$")],
+        WIZARD_CRYPTO_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_crypto_key), CallbackQueryHandler(wizard_skip_crypto, pattern=r"^wizard:skip_crypto$")],
         WIZARD_CURRENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_currency)],
         PLAN_CREATE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_get_name)],
         PLAN_CREATE_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_get_data)],
         PLAN_CREATE_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_get_days)],
         PLAN_CREATE_IP: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_get_ip)],
         PLAN_CREATE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_get_price)],
-        PLAN_CREATE_NODES: [
-            CallbackQueryHandler(plan_toggle_node, pattern=r"^node_toggle:"),
-            CallbackQueryHandler(plan_nodes_done, pattern=r"^plan:nodes_done$"),
-        ],
+        PLAN_CREATE_NODES: [CallbackQueryHandler(plan_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(plan_nodes_done, pattern=r"^plan:nodes_done$")],
         PLAN_EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_edit_value)],
         ADMIN_ADD_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_id)],
         ADMIN_ADD_PERMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_perms)],
@@ -916,49 +1136,60 @@ def get_main_conv_handler():
         ADMIN_MANUAL_SUB_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_data)],
         ADMIN_MANUAL_SUB_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_days)],
         ADMIN_MANUAL_SUB_IP: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_ip)],
-        ADMIN_MANUAL_SUB_NODES: [
-            CallbackQueryHandler(manual_sub_toggle_node, pattern=r"^node_toggle:"),
-            CallbackQueryHandler(manual_sub_done, pattern=r"^msub:nodes_done$"),
-        ],
+        ADMIN_MANUAL_SUB_NODES: [CallbackQueryHandler(manual_sub_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(manual_sub_done, pattern=r"^msub:nodes_done$")],
         SETTINGS_GG_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_gg_url)],
         SETTINGS_CARD_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_card_num)],
         SETTINGS_CARD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_card_name)],
         SETTINGS_CRYPTO_MID: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_crypto_mid)],
         SETTINGS_CRYPTO_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_crypto_key)],
         SETTINGS_SUPPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_support)],
-        SETTINGS_CURRENCY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_currency)],
         SETTINGS_SYNC: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_sync)],
         USER_SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, users_search)],
         SUB_SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, subs_search)],
+        ADMIN_REJECT_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reject_reason), CallbackQueryHandler(cb_reject_skip, pattern=r"^reject:skip$")],
+        CURR_ADD_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, curr_add_code)],
+        CURR_ADD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, curr_add_name)],
+        CURR_ADD_DECIMALS: [MessageHandler(filters.TEXT & ~filters.COMMAND, curr_add_decimals)],
+        CURR_ADD_METHODS: [CallbackQueryHandler(curr_toggle_method, pattern=r"^meth_toggle:"), CallbackQueryHandler(curr_methods_done, pattern=r"^curr:methods_done$")],
+        CURR_ADD_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, curr_add_rate)],
+        CURR_EDIT_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, curr_edit_rate_save)],
     }
-    return ConversationHandler(
-        entry_points=[CommandHandler("start", cmd_start_admin)],
-        states=wizard_states,
-        fallbacks=[CallbackQueryHandler(cb_cancel_conv, pattern=r"^cancel$")],
-        per_message=False,
-        name="admin_main"
-    )
+    entry_points = [
+        CommandHandler("start", cmd_start_admin),
+        CallbackQueryHandler(cb_plan_create, pattern=r"^plan:create$"),
+        CallbackQueryHandler(cb_plan_edit_price, pattern=r"^plan:edit_price:"),
+        CallbackQueryHandler(cb_plan_edit_name, pattern=r"^plan:edit_name:"),
+        CallbackQueryHandler(cb_sub_create, pattern=r"^sub:create$"),
+        CallbackQueryHandler(cb_admin_add, pattern=r"^admin:add$"),
+        CallbackQueryHandler(cb_users_search_prompt, pattern=r"^users:search$"),
+        CallbackQueryHandler(cb_subs_search_prompt, pattern=r"^subs:search$"),
+        CallbackQueryHandler(cb_set_gg_url, pattern=r"^set:gg_url$"),
+        CallbackQueryHandler(cb_set_card_num, pattern=r"^set:card_num$"),
+        CallbackQueryHandler(cb_set_card_name, pattern=r"^set:card_name$"),
+        CallbackQueryHandler(cb_set_crypto_mid, pattern=r"^set:crypto_mid$"),
+        CallbackQueryHandler(cb_set_crypto_key, pattern=r"^set:crypto_key$"),
+        CallbackQueryHandler(cb_set_support, pattern=r"^set:support$"),
+        CallbackQueryHandler(cb_set_sync, pattern=r"^set:sync$"),
+        CallbackQueryHandler(cb_curr_add, pattern=r"^curr:add$"),
+        CallbackQueryHandler(cb_curr_edit_rate, pattern=r"^curr:edit_rate:"),
+        CallbackQueryHandler(cb_reject_order, pattern=r"^order:reject:"),
+    ]
+    return ConversationHandler(entry_points=entry_points, states=states, fallbacks=[CallbackQueryHandler(cb_cancel_conv, pattern=r"^cancel$")], per_message=False, name="admin_main")
 
 def get_handlers():
     return [
         get_main_conv_handler(),
         CallbackQueryHandler(cb_adm_back, pattern=r"^adm:back$"),
         CallbackQueryHandler(cb_adm_plans, pattern=r"^adm:plans$"),
-        CallbackQueryHandler(cb_plan_detail, pattern=r"^plan:detail:"),
+        CallbackQueryHandler(cb_plan_detail_admin, pattern=r"^plan:detail:"),
         CallbackQueryHandler(cb_plan_toggle, pattern=r"^plan:toggle:"),
         CallbackQueryHandler(cb_plan_delete, pattern=r"^plan:delete:"),
-        CallbackQueryHandler(cb_plan_create, pattern=r"^plan:create$"),
-        CallbackQueryHandler(cb_plan_edit_price, pattern=r"^plan:edit_price:"),
-        CallbackQueryHandler(cb_plan_edit_name, pattern=r"^plan:edit_name:"),
         CallbackQueryHandler(cb_adm_subs, pattern=r"^adm:subs$"),
         CallbackQueryHandler(cb_sub_detail, pattern=r"^sub:detail:"),
         CallbackQueryHandler(cb_sub_stats, pattern=r"^sub:stats:"),
         CallbackQueryHandler(cb_sub_delete, pattern=r"^sub:delete:"),
-        CallbackQueryHandler(cb_sub_create, pattern=r"^sub:create$"),
         CallbackQueryHandler(cb_subs_page, pattern=r"^subs_page:"),
-        CallbackQueryHandler(cb_subs_search_prompt, pattern=r"^subs:search$"),
         CallbackQueryHandler(cb_adm_users, pattern=r"^adm:users$"),
-        CallbackQueryHandler(cb_users_search_prompt, pattern=r"^users:search$"),
         CallbackQueryHandler(cb_user_detail, pattern=r"^user:detail:"),
         CallbackQueryHandler(cb_user_ban, pattern=r"^user:ban:"),
         CallbackQueryHandler(cb_user_unban, pattern=r"^user:unban:"),
@@ -966,23 +1197,20 @@ def get_handlers():
         CallbackQueryHandler(cb_adm_orders, pattern=r"^adm:orders$"),
         CallbackQueryHandler(cb_orders_list, pattern=r"^orders:list:"),
         CallbackQueryHandler(cb_order_detail, pattern=r"^order:detail:"),
+        CallbackQueryHandler(cb_confirm_order, pattern=r"^order:confirm:"),
         CallbackQueryHandler(cb_adm_admins, pattern=r"^adm:admins$"),
-        CallbackQueryHandler(cb_admin_add, pattern=r"^admin:add$"),
         CallbackQueryHandler(cb_admin_detail, pattern=r"^admin:detail:"),
         CallbackQueryHandler(cb_admin_remove, pattern=r"^admin:remove:"),
         CallbackQueryHandler(cb_adm_settings, pattern=r"^adm:settings$"),
-        CallbackQueryHandler(cb_set_gg_url, pattern=r"^set:gg_url$"),
         CallbackQueryHandler(cb_set_card, pattern=r"^set:card$"),
         CallbackQueryHandler(cb_card_toggle, pattern=r"^set:card_toggle$"),
-        CallbackQueryHandler(cb_set_card_num, pattern=r"^set:card_num$"),
-        CallbackQueryHandler(cb_set_card_name, pattern=r"^set:card_name$"),
         CallbackQueryHandler(cb_set_crypto, pattern=r"^set:crypto$"),
         CallbackQueryHandler(cb_crypto_toggle, pattern=r"^set:crypto_toggle$"),
-        CallbackQueryHandler(cb_set_crypto_mid, pattern=r"^set:crypto_mid$"),
-        CallbackQueryHandler(cb_set_crypto_key, pattern=r"^set:crypto_key$"),
         CallbackQueryHandler(cb_set_requests, pattern=r"^set:requests$"),
         CallbackQueryHandler(cb_req_toggle, pattern=r"^set:req_toggle$"),
-        CallbackQueryHandler(cb_set_support, pattern=r"^set:support$"),
-        CallbackQueryHandler(cb_set_currency, pattern=r"^set:currency$"),
-        CallbackQueryHandler(cb_set_sync, pattern=r"^set:sync$"),
+        CallbackQueryHandler(cb_set_currencies, pattern=r"^set:currencies$"),
+        CallbackQueryHandler(cb_curr_detail, pattern=r"^curr:detail:"),
+        CallbackQueryHandler(cb_curr_delete, pattern=r"^curr:delete:"),
+        CallbackQueryHandler(cb_curr_set_base_prompt, pattern=r"^curr:set_base$"),
+        CallbackQueryHandler(cb_curr_make_base, pattern=r"^curr:make_base:"),
     ]

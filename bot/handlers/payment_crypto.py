@@ -9,6 +9,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.ext import ContextTypes, CallbackQueryHandler
 import core.db as db
 import core.ghostgate as gg
+from core.currency import price_for_method, fmt
 from bot.strings import t
 
 logger = logging.getLogger(__name__)
@@ -48,17 +49,18 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not plan:
         await query.edit_message_text(t("order_not_found"))
         return
-    currency = await db.get_setting("currency", "USD")
     merchant_id = await db.get_setting("cryptomus_merchant_id", "")
     api_key = await db.get_setting("cryptomus_api_key", "")
     if not merchant_id or not api_key:
         await query.edit_message_text(t("service_unavailable"))
         return
+    amount, code, decimals = await price_for_method(plan["price"], "crypto")
+    price_str = f"{fmt(amount, decimals)} {code}"
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
-    order_id = await db.create_order(uid, plan_id, "crypto", plan["price"], currency)
+    order_id = await db.create_order(uid, plan_id, "crypto", float(amount), code)
     try:
-        result = await create_invoice(order_id, plan["price"], currency, merchant_id, api_key)
+        result = await create_invoice(order_id, fmt(amount, decimals), code, merchant_id, api_key)
         inv = result.get("result", {})
         invoice_id = inv.get("uuid")
         pay_url = inv.get("url")
@@ -70,7 +72,7 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("ghostgate_error"))
         return
     await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
-    text = t("crypto_invoice_created", amount=plan["price"], currency=currency)
+    text = t("crypto_invoice_created", amount=price_str)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Open payment page", url=pay_url)]])
     await query.edit_message_text(text, reply_markup=kb)
     asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot))
@@ -80,11 +82,10 @@ async def _poll_invoice(invoice_id, order_id, telegram_id, merchant_id, api_key,
         await asyncio.sleep(30)
         try:
             order = await db.get_order(order_id)
-            if not order or order["status"] not in ("pending",):
+            if not order or order["status"]!="pending":
                 return
             result = await check_invoice(invoice_id, merchant_id, api_key)
-            status = result.get("result", {}).get("payment_status", "")
-            if status in ("paid", "paid_over"):
+            if result.get("result", {}).get("payment_status") in ("paid", "paid_over"):
                 await _activate_order(order_id, telegram_id, bot)
                 return
         except Exception as e:
@@ -129,8 +130,7 @@ async def _webhook_handler(request):
         sign_received = data.get("sign", "")
         data_copy = {k: v for k, v in data.items() if k!="sign"}
         body_check = json.dumps(data_copy, separators=(",", ":"), sort_keys=True).encode()
-        expected = _sign(body_check, api_key)
-        if sign_received!=expected:
+        if sign_received!=_sign(body_check, api_key):
             logger.warning("Cryptomus webhook signature mismatch")
             return web.Response(status=403)
         status = data.get("payment_status", "")

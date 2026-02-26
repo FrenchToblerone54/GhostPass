@@ -3,6 +3,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 import core.db as db
 import core.ghostgate as gg
+from core.currency import get_base_currency, fmt_price_for_method, price_for_method, fmt
 from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb
 from bot.strings import t
 from config import settings
@@ -32,15 +33,15 @@ async def cmd_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _show_plans(update, ctx):
     plans = await db.list_plans(active_only=True)
-    currency = await db.get_setting("currency", "USD")
+    base = await get_base_currency()
     if not plans:
         target = update.message or update.callback_query.message
         await target.reply_text(t("no_plans"))
         return
     text = t("plans_header") + "\n"
     for p in plans:
-        text += f"\n*{p['name']}* — {p['data_gb']} GB / {p['days']}d — {p['price']} {currency}"
-    kb = plans_kb(plans)
+        text += f"\n*{p['name']}* — {p['data_gb']} GB / {p['days']}d — {p['price']} {base}"
+    kb = plans_kb(plans, base)
     if update.message:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
     else:
@@ -91,12 +92,22 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not plan:
         await query.edit_message_text(t("order_not_found"))
         return
-    currency = await db.get_setting("currency", "USD")
     card_enabled = await db.get_setting("card_enabled", "0")=="1"
     crypto_enabled = await db.get_setting("cryptomus_enabled", "0")=="1"
     requests_enabled = await db.get_setting("requests_enabled", "0")=="1"
     support = await db.get_setting("support_username", "")
-    text = t("plan_detail", name=plan["name"], data_gb=plan["data_gb"], days=plan["days"], ip_limit=plan["ip_limit"], price=plan["price"], currency=currency)
+    text = t("plan_detail", name=plan["name"], data_gb=plan["data_gb"], days=plan["days"], ip_limit=plan["ip_limit"])
+    prices = ""
+    if card_enabled:
+        prices += f"\n{t('plan_price_line_card', price=await fmt_price_for_method(plan['price'], 'card'))}"
+    if crypto_enabled:
+        prices += f"\n{t('plan_price_line_crypto', price=await fmt_price_for_method(plan['price'], 'crypto'))}"
+    if requests_enabled:
+        prices += f"\n{t('plan_price_line_request', price=await fmt_price_for_method(plan['price'], 'request'))}"
+    if not prices:
+        base = await get_base_currency()
+        prices = "\n" + t("plan_price_fallback", price=f"{plan['price']} {base}")
+    text += prices
     if not card_enabled and not crypto_enabled and not requests_enabled:
         if support:
             text += t("support_purchase", support=support)

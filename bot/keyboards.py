@@ -30,8 +30,8 @@ def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled):
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="consumer:plans")])
     return InlineKeyboardMarkup(rows)
 
-def plans_kb(plans):
-    rows = [[InlineKeyboardButton(f"{p['name']} — {p['price']} ", callback_data=f"plan:{p['id']}")] for p in plans]
+def plans_kb(plans, base_currency="IRT"):
+    rows = [[InlineKeyboardButton(f"{p['name']} — {p['price']} {base_currency}", callback_data=f"plan:{p['id']}")] for p in plans]
     return InlineKeyboardMarkup(rows)
 
 def settings_kb():
@@ -41,24 +41,24 @@ def settings_kb():
         [InlineKeyboardButton("🪙 Cryptomus", callback_data="set:crypto")],
         [InlineKeyboardButton("🙋 Request Flow", callback_data="set:requests")],
         [InlineKeyboardButton("📝 Support Contact", callback_data="set:support")],
-        [InlineKeyboardButton("💱 Currency", callback_data="set:currency")],
+        [InlineKeyboardButton("💱 Currencies", callback_data="set:currencies")],
         [InlineKeyboardButton("🔄 Sync Interval", callback_data="set:sync")],
         [InlineKeyboardButton("⬅️ Back", callback_data="adm:back")],
     ])
 
-def paginate_kb(items, page, per_page, prefix, back_cb):
-    total = len(items)
-    start = page*per_page
-    page_items = items[start:start+per_page]
-    rows = [[InlineKeyboardButton(item["label"], callback_data=f"{prefix}:{item['id']}")] for item in page_items]
-    nav = []
-    if page>0:
-        nav.append(InlineKeyboardButton("◀️", callback_data=f"{prefix}_page:{page-1}"))
-    if start+per_page<total:
-        nav.append(InlineKeyboardButton("▶️", callback_data=f"{prefix}_page:{page+1}"))
-    if nav:
-        rows.append(nav)
+def currencies_kb(currencies, base_currency, back_cb):
+    rows = [[InlineKeyboardButton(f"{'📌 ' if c['code']==base_currency else ''}{c['code']} — {c['name']}", callback_data=f"curr:detail:{c['code']}")] for c in currencies]
+    rows.append([InlineKeyboardButton("➕ Add Currency", callback_data="curr:add"), InlineKeyboardButton("📌 Set Base", callback_data="curr:set_base")])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data=back_cb)])
+    return InlineKeyboardMarkup(rows)
+
+def method_select_kb(selected_methods, done_cb, back_cb):
+    all_methods = [("card", "💳 Card"), ("crypto", "🪙 Crypto"), ("request", "🙋 Request")]
+    rows = []
+    for code, label in all_methods:
+        check = "✅" if code in selected_methods else "⬜"
+        rows.append([InlineKeyboardButton(f"{check} {label}", callback_data=f"meth_toggle:{code}")])
+    rows.append([InlineKeyboardButton("✅ Done", callback_data=done_cb), InlineKeyboardButton("⬅️ Back", callback_data=back_cb)])
     return InlineKeyboardMarkup(rows)
 
 def node_select_kb(nodes, selected_ids, done_cb, back_cb):
@@ -79,13 +79,6 @@ def skip_kb(skip_cb, back_cb=None):
 
 def yes_no_kb(yes_cb, no_cb):
     return InlineKeyboardMarkup([[InlineKeyboardButton("✅ Yes", callback_data=yes_cb), InlineKeyboardButton("❌ No", callback_data=no_cb)]])
-
-def toggle_kb(label, enabled, toggle_cb, back_cb):
-    status = "✅ Enabled" if enabled else "❌ Disabled"
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"Toggle: {status}", callback_data=toggle_cb)],
-        [InlineKeyboardButton("⬅️ Back", callback_data=back_cb)],
-    ])
 
 def cancel_kb():
     return InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="cancel")]])
@@ -119,5 +112,18 @@ def order_detail_kb(order_id, status, back_cb):
     rows = []
     if status in ("pending", "waiting_confirm"):
         rows.append([InlineKeyboardButton("✅ Confirm", callback_data=f"order:confirm:{order_id}"), InlineKeyboardButton("❌ Reject", callback_data=f"order:reject:{order_id}")])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data=back_cb)])
+    return InlineKeyboardMarkup(rows)
+
+def curr_detail_kb(code, is_base, back_cb):
+    rows = []
+    if not is_base:
+        rows.append([InlineKeyboardButton("✏️ Edit Rate", callback_data=f"curr:edit_rate:{code}")])
+    rows.append([InlineKeyboardButton("🗑️ Delete", callback_data=f"curr:delete:{code}")])
+    rows.append([InlineKeyboardButton("⬅️ Back", callback_data=back_cb)])
+    return InlineKeyboardMarkup(rows)
+
+def base_select_kb(currencies, back_cb):
+    rows = [[InlineKeyboardButton(f"{c['code']} — {c['name']}", callback_data=f"curr:make_base:{c['code']}")] for c in currencies]
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data=back_cb)])
     return InlineKeyboardMarkup(rows)

@@ -11,5 +11,6 @@ venv/
 *.egg-info/
 dist/
 build/
+!build/build.sh
 .DS_Store
 *.log
