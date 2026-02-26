@@ -6,10 +6,12 @@
 
 ---
 
-## One-Command Install
+## Quick Start
 
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/FrenchToblerone54/ghostpass/main/install.sh && bash install.sh
+wget https://raw.githubusercontent.com/FrenchToblerone54/ghostpass/main/install.sh -O install.sh
+chmod +x install.sh
+sudo ./install.sh
 ```
 
 The script will ask for:

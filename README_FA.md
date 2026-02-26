@@ -6,10 +6,12 @@
 
 ---
 
-## نصب با یک دستور
+## شروع سریع
 
 ```bash
-wget -O install.sh https://raw.githubusercontent.com/FrenchToblerone54/ghostpass/main/install.sh && bash install.sh
+wget https://raw.githubusercontent.com/FrenchToblerone54/ghostpass/main/install.sh -O install.sh
+chmod +x install.sh
+sudo ./install.sh
 ```
 
 اسکریپت چهار چیز می‌پرسد:
