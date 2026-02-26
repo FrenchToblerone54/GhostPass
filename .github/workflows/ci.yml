@@ -18,7 +18,7 @@ jobs:
           python -m pip install -r requirements.txt
       - name: Syntax check
         run: |
-          python -m py_compile config.py main.py version.py
+          python -m py_compile config.py main.py
           python -m py_compile bot/app.py bot/menus.py bot/keyboards.py bot/states.py bot/strings.py
           python -m py_compile bot/handlers/admin.py bot/handlers/consumer.py
           python -m py_compile bot/handlers/payment_card.py bot/handlers/payment_crypto.py bot/handlers/payment_request.py
