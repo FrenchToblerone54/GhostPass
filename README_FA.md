@@ -136,4 +136,4 @@ sudo journalctl -u ghostpass -f
 
 ## مجوز
 
-MIT
+MIT License - جزئیات در فایل LICENSE
