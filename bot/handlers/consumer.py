@@ -1,5 +1,6 @@
+import json
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 import core.db as db
 import core.ghostgate as gg
@@ -19,11 +20,12 @@ async def _check_banned(update):
     return user and user.get("is_banned")
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    await _ensure_user(update)
+    uid = await _ensure_user(update)
     if await _check_banned(update):
         await update.message.reply_text(t("banned"))
         return
-    await update.message.reply_text(t("welcome"), reply_markup=main_consumer_kb())
+    show_trial = await db.get_setting("trial_enabled", "0")=="1" and not await db.has_trial_claim(uid)
+    await update.message.reply_text(t("welcome"), reply_markup=main_consumer_kb(show_trial))
 
 async def cmd_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _ensure_user(update)
@@ -123,6 +125,65 @@ async def cb_consumer_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await _show_plans(update, ctx)
 
+async def cmd_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = await _ensure_user(update)
+    if await _check_banned(update):
+        return
+    if await db.get_setting("trial_enabled", "0")!="1":
+        await update.message.reply_text(t("trial_not_available"))
+        return
+    if await db.has_trial_claim(uid):
+        await update.message.reply_text(t("trial_already_claimed"))
+        return
+    data_gb = await db.get_setting("trial_data_gb", "0.5")
+    expire_h = int(await db.get_setting("trial_expire_seconds", "86400"))//3600
+    await update.message.reply_text(
+        t("trial_info", data_gb=data_gb, expire_h=expire_h),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎁 Claim Free Trial", callback_data="trial:claim")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="trial:back")],
+        ]),
+        parse_mode="Markdown"
+    )
+
+async def cb_trial_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
+    if await db.get_setting("trial_enabled", "0")!="1":
+        await query.edit_message_text(t("trial_not_available"))
+        return
+    if await db.has_trial_claim(uid):
+        await query.edit_message_text(t("trial_already_claimed"))
+        return
+    data_gb = float(await db.get_setting("trial_data_gb", "0.5"))
+    expire_s = int(await db.get_setting("trial_expire_seconds", "86400"))
+    node_ids = json.loads(await db.get_setting("trial_node_ids", "[]"))
+    result = await gg.create_subscription(
+        comment=f"Trial-{query.from_user.id}",
+        data_gb=data_gb,
+        days=3650,
+        ip_limit=1,
+        node_ids=node_ids,
+        expire_after_first_use_seconds=expire_s
+    )
+    if not result or not result.get("id"):
+        await query.edit_message_text(t("service_unavailable"))
+        return
+    await db.create_trial_claim(uid, result["id"])
+    await ctx.bot.send_message(
+        chat_id=query.from_user.id,
+        text=t("trial_claimed", url=result.get("url", "")),
+        reply_markup=main_consumer_kb(show_trial=False),
+        parse_mode="Markdown"
+    )
+    await query.delete_message()
+
+async def cb_trial_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.delete_message()
+
 async def handle_menu_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text=="📦 Plans":
@@ -131,6 +192,8 @@ async def handle_menu_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_mystatus(update, ctx)
     elif text=="💬 Support":
         await cmd_support(update, ctx)
+    elif text=="🎁 Free Trial":
+        await cmd_trial(update, ctx)
 
 def get_handlers():
     return [
@@ -141,4 +204,6 @@ def get_handlers():
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_buttons),
         CallbackQueryHandler(cb_plan_detail, pattern=r"^plan:"),
         CallbackQueryHandler(cb_consumer_plans, pattern=r"^consumer:plans$"),
+        CallbackQueryHandler(cb_trial_claim, pattern=r"^trial:claim$"),
+        CallbackQueryHandler(cb_trial_back, pattern=r"^trial:back$"),
     ]

@@ -76,6 +76,13 @@ _EN = {
     "curr_set_base_prompt": "Select which currency to use as base (plan prices are entered in this unit):",
     "curr_base_set": "✅ Base currency set to {code}.",
     "plan_price_enter": "Enter price in {base} (e.g. 500000):",
+    "trial_info": "🎁 *Free Trial*\n\n{data_gb} GB • {expire_h}h from first use\n\nClaim your one-time free trial!",
+    "trial_not_available": "🎁 Free trial is not available at the moment.",
+    "trial_already_claimed": "🎁 You have already claimed your free trial.",
+    "trial_claimed": "🎁 Your free trial is ready!\n\n🔗 Link: `{url}`\n\nImport this link into your VPN app. Your trial starts on first connection.",
+    "trial_settings": "🎁 *Trial Subscription*\n\nStatus: {status}\nData: {data_gb} GB\nExpiry: {expire_h}h after first use\nNodes: {node_count} configured",
+    "trial_data_prompt": "Enter trial data limit in GB (e.g. 0.5):",
+    "trial_expire_prompt": "Enter trial duration in hours after first use (e.g. 24):",
 }
 
 _FA = {
@@ -154,6 +161,13 @@ _FA = {
     "curr_set_base_prompt": "ارزی که قیمت پلان‌ها با آن وارد می‌شود را انتخاب کنید:",
     "curr_base_set": "✅ ارز پایه به {code} تغییر کرد.",
     "plan_price_enter": "قیمت را به {base} وارد کنید (مثال: ۵۰۰۰۰۰):",
+    "trial_info": "🎁 *آزمایشی رایگان*\n\n{data_gb} گیگ • {expire_h} ساعت از اولین اتصال\n\nاشتراک آزمایشی یک‌بار مصرف خود را دریافت کنید!",
+    "trial_not_available": "🎁 در حال حاضر اشتراک آزمایشی موجود نیست.",
+    "trial_already_claimed": "🎁 شما قبلاً اشتراک آزمایشی خود را دریافت کرده‌اید.",
+    "trial_claimed": "🎁 اشتراک آزمایشی شما آماده است!\n\n🔗 لینک: `{url}`\n\nاین لینک را در اپلیکیشن VPN وارد کنید. تایمر از اولین اتصال شروع می‌شود.",
+    "trial_settings": "🎁 *اشتراک آزمایشی*\n\nوضعیت: {status}\nحجم: {data_gb} گیگابایت\nانقضا: {expire_h} ساعت پس از اولین اتصال\nنودها: {node_count} پیکربندی‌شده",
+    "trial_data_prompt": "حجم آزمایشی را به گیگابایت وارد کنید (مثال: ۰.۵):",
+    "trial_expire_prompt": "مدت آزمایشی را به ساعت وارد کنید (مثال: ۲۴):",
 }
 
 def t(key, **kwargs):

@@ -23,7 +23,7 @@ class Updater:
 
     def get_current_version(self):
         if Path(sys.argv[0]).name=="ghostpass":
-            return "v0.1.2"
+            return "v0.1.3"
         return "dev"
 
     async def http_get(self, url, timeout):

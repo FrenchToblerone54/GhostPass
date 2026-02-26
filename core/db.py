@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS trial_claims (
+    user_id         TEXT PRIMARY KEY REFERENCES users(id),
+    claimed_at      TEXT DEFAULT (datetime('now')),
+    ghostgate_sub_id TEXT
+);
 """)
         await db.commit()
 
@@ -269,6 +274,16 @@ async def get_all_settings():
     async with _open() as db:
         rows = await (await db.execute("SELECT key, value FROM settings")).fetchall()
         return {r["key"]: r["value"] for r in rows}
+
+async def has_trial_claim(user_id):
+    async with _open() as db:
+        row = await (await db.execute("SELECT 1 FROM trial_claims WHERE user_id=?", (user_id,))).fetchone()
+        return row is not None
+
+async def create_trial_claim(user_id, ghostgate_sub_id):
+    async with _open() as db:
+        await db.execute("INSERT INTO trial_claims (user_id, ghostgate_sub_id) VALUES (?,?)", (user_id, str(ghostgate_sub_id)))
+        await db.commit()
 
 async def get_orders_by_invoice(invoice_id):
     async with _open() as db:

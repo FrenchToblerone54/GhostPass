@@ -1,7 +1,10 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 
-def main_consumer_kb():
-    return ReplyKeyboardMarkup([["📦 Plans", "📊 My Status"], ["💬 Support"]], resize_keyboard=True)
+def main_consumer_kb(show_trial=False):
+    rows = [["📦 Plans", "📊 My Status"], ["💬 Support"]]
+    if show_trial:
+        rows.insert(0, ["🎁 Free Trial"])
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
 
 def main_admin_kb():
     return InlineKeyboardMarkup([
@@ -42,6 +45,7 @@ def settings_kb():
         [InlineKeyboardButton("🙋 Request Flow", callback_data="set:requests")],
         [InlineKeyboardButton("📝 Support Contact", callback_data="set:support")],
         [InlineKeyboardButton("💱 Currencies", callback_data="set:currencies")],
+        [InlineKeyboardButton("🎁 Trial Subscription", callback_data="set:trial")],
         [InlineKeyboardButton("🔄 Sync Interval", callback_data="set:sync")],
         [InlineKeyboardButton("⬅️ Back", callback_data="adm:back")],
     ])

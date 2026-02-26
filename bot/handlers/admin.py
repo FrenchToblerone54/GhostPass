@@ -34,7 +34,8 @@ from bot.states import (
     SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL,
     USER_SEARCH, SUB_SEARCH,
     ADMIN_REJECT_REASON,
-    CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE
+    CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE,
+    SETTINGS_TRIAL_DATA, SETTINGS_TRIAL_EXPIRE, SETTINGS_TRIAL_NODES
 )
 from config import settings
 
@@ -1102,6 +1103,103 @@ async def subs_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Search results:", reply_markup=InlineKeyboardMarkup(rows))
     return ConversationHandler.END
 
+async def cb_set_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not await _is_admin(query.from_user.id):
+        return
+    enabled = await db.get_setting("trial_enabled", "0")=="1"
+    data_gb = await db.get_setting("trial_data_gb", "0.5")
+    expire_h = int(await db.get_setting("trial_expire_seconds", "86400"))//3600
+    node_ids = json.loads(await db.get_setting("trial_node_ids", "[]"))
+    await query.edit_message_text(
+        t("trial_settings", status="✅ Enabled" if enabled else "❌ Disabled", data_gb=data_gb, expire_h=expire_h, node_count=len(node_ids)),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(f"Toggle: {'✅ Enabled' if enabled else '❌ Disabled'}", callback_data="set:trial_toggle")],
+            [InlineKeyboardButton("✏️ Set Data GB", callback_data="set:trial_data")],
+            [InlineKeyboardButton("✏️ Set Expire Time", callback_data="set:trial_expire")],
+            [InlineKeyboardButton("🖥️ Configure Nodes", callback_data="set:trial_nodes")],
+            [InlineKeyboardButton("⬅️ Back", callback_data="adm:settings")],
+        ]),
+        parse_mode="Markdown"
+    )
+
+async def cb_trial_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not await _is_admin(query.from_user.id):
+        return
+    enabled = await db.get_setting("trial_enabled", "0")=="1"
+    await db.set_setting("trial_enabled", "0" if enabled else "1")
+    await cb_set_trial(update, ctx)
+
+async def cb_set_trial_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("trial_data_prompt"), reply_markup=cancel_kb())
+    return SETTINGS_TRIAL_DATA
+
+async def settings_trial_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text.strip())
+        if val<=0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_TRIAL_DATA
+    await db.set_setting("trial_data_gb", str(val))
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
+    return ConversationHandler.END
+
+async def cb_set_trial_expire(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("trial_expire_prompt"), reply_markup=cancel_kb())
+    return SETTINGS_TRIAL_EXPIRE
+
+async def settings_trial_expire(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        hours = int(update.message.text.strip())
+        if hours<=0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_TRIAL_EXPIRE
+    await db.set_setting("trial_expire_seconds", str(hours*3600))
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
+    return ConversationHandler.END
+
+async def cb_set_trial_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    nodes = await gg.list_nodes()
+    stored = json.loads(await db.get_setting("trial_node_ids", "[]"))
+    ctx.user_data["trial_nodes"]=list(stored)
+    await query.edit_message_text("🎁 Select nodes for trial subscription:", reply_markup=node_select_kb(nodes, stored, "trial:nodes_done", "cancel"))
+    return SETTINGS_TRIAL_NODES
+
+async def trial_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    nid = int(query.data.split(":", 1)[1])
+    selected = ctx.user_data.get("trial_nodes", [])
+    if nid in selected:
+        selected.remove(nid)
+    else:
+        selected.append(nid)
+    ctx.user_data["trial_nodes"]=selected
+    nodes = await gg.list_nodes()
+    await query.edit_message_text("🎁 Select nodes for trial subscription:", reply_markup=node_select_kb(nodes, selected, "trial:nodes_done", "cancel"))
+    return SETTINGS_TRIAL_NODES
+
+async def trial_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    selected = ctx.user_data.pop("trial_nodes", [])
+    await db.set_setting("trial_node_ids", json.dumps(selected))
+    await query.edit_message_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
+    return ConversationHandler.END
+
 async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1109,7 +1207,7 @@ async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
               "msub_comment", "msub_data", "msub_days", "msub_ip", "msub_nodes",
               "new_admin_id", "editing_plan_id", "editing_plan_field",
               "new_curr_code", "new_curr_name", "new_curr_decimals", "new_curr_methods", "editing_curr_code",
-              "rejecting_order_id", "pending_order_id", "request_order_id"):
+              "rejecting_order_id", "pending_order_id", "request_order_id", "trial_nodes"):
         ctx.user_data.pop(k, None)
     await query.edit_message_text("❌ Cancelled.", reply_markup=back_kb("adm:back"))
     return ConversationHandler.END
@@ -1153,6 +1251,9 @@ def get_main_conv_handler():
         CURR_ADD_METHODS: [CallbackQueryHandler(curr_toggle_method, pattern=r"^meth_toggle:"), CallbackQueryHandler(curr_methods_done, pattern=r"^curr:methods_done$")],
         CURR_ADD_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, curr_add_rate)],
         CURR_EDIT_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, curr_edit_rate_save)],
+        SETTINGS_TRIAL_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_data)],
+        SETTINGS_TRIAL_EXPIRE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_expire)],
+        SETTINGS_TRIAL_NODES: [CallbackQueryHandler(trial_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(trial_nodes_done, pattern=r"^trial:nodes_done$")],
     }
     entry_points = [
         CommandHandler("start", cmd_start_admin),
@@ -1171,6 +1272,9 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_support, pattern=r"^set:support$"),
         CallbackQueryHandler(cb_set_sync, pattern=r"^set:sync$"),
         CallbackQueryHandler(cb_curr_add, pattern=r"^curr:add$"),
+        CallbackQueryHandler(cb_set_trial_data, pattern=r"^set:trial_data$"),
+        CallbackQueryHandler(cb_set_trial_expire, pattern=r"^set:trial_expire$"),
+        CallbackQueryHandler(cb_set_trial_nodes, pattern=r"^set:trial_nodes$"),
         CallbackQueryHandler(cb_curr_edit_rate, pattern=r"^curr:edit_rate:"),
         CallbackQueryHandler(cb_reject_order, pattern=r"^order:reject:"),
     ]
@@ -1213,4 +1317,6 @@ def get_handlers():
         CallbackQueryHandler(cb_curr_delete, pattern=r"^curr:delete:"),
         CallbackQueryHandler(cb_curr_set_base_prompt, pattern=r"^curr:set_base$"),
         CallbackQueryHandler(cb_curr_make_base, pattern=r"^curr:make_base:"),
+        CallbackQueryHandler(cb_set_trial, pattern=r"^set:trial$"),
+        CallbackQueryHandler(cb_trial_toggle, pattern=r"^set:trial_toggle$"),
     ]
