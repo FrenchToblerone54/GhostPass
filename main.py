@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import sys
+import time
 from bot.app import build_app
 from config import settings
 
@@ -12,9 +14,37 @@ logging.basicConfig(
     ]
 )
 
+logger = logging.getLogger(__name__)
+
+async def _run_once():
+    app = build_app()
+    async with app:
+        await app.start()
+        await app.updater.start_polling(drop_pending_updates=True)
+        async def _watchdog():
+            fails = 0
+            while True:
+                await asyncio.sleep(30)
+                try:
+                    await asyncio.wait_for(app.bot.get_me(), timeout=10)
+                    fails = 0
+                except Exception as e:
+                    fails += 1
+                    logger.warning(f"Watchdog failed ({fails}/3): {e}")
+                    if fails >= 3:
+                        raise RuntimeError("Watchdog restart")
+        try:
+            await asyncio.gather(asyncio.sleep(float("inf")), _watchdog())
+        finally:
+            await app.updater.stop()
+            await app.stop()
+
 if __name__=="__main__":
-    try:
-        build_app().run_polling(drop_pending_updates=True)
-    except Exception as e:
-        logging.critical("Fatal crash: %s", e, exc_info=True)
-        sys.exit(1)
+    while True:
+        try:
+            asyncio.run(_run_once())
+        except (KeyboardInterrupt, SystemExit):
+            break
+        except Exception as e:
+            logger.critical("Bot crashed: %s, restarting in 5s", e, exc_info=True)
+            time.sleep(5)

@@ -33,7 +33,7 @@ async def _post_stop(app: Application):
         shutdown_event.set()
 
 def build_app() -> Application:
-    builder=ApplicationBuilder().token(settings.BOT_TOKEN).post_init(_post_init).post_stop(_post_stop)
+    builder=ApplicationBuilder().token(settings.BOT_TOKEN).post_init(_post_init).post_stop(_post_stop).concurrent_updates(True)
     if settings.BOT_PROXY:
         builder=builder.proxy(settings.BOT_PROXY).get_updates_proxy(settings.BOT_PROXY)
     app=builder.build()
