@@ -77,7 +77,7 @@ async def cmd_mystatus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⏰ Expires: {expire_at}\n"
             f"🔗 Link: `{sub_url}`"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Regenerate Link", callback_data=f"sub:regen:{sub_id}")]])
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_regen_link"), callback_data=f"sub:regen:{sub_id}")]])
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
 
 async def cb_regen_sub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -85,8 +85,8 @@ async def cb_regen_sub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     sub_id = query.data.split(":", 2)[2]
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Yes", callback_data=f"sub:regen_yes:{sub_id}"),
-        InlineKeyboardButton("❌ No", callback_data="sub:regen_no"),
+        InlineKeyboardButton(t("btn_yes"), callback_data=f"sub:regen_yes:{sub_id}"),
+        InlineKeyboardButton(t("btn_no"), callback_data="sub:regen_no"),
     ]])
     await query.edit_message_text(t("regen_confirm"), reply_markup=kb)
 
@@ -169,8 +169,8 @@ async def cmd_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         t("trial_info", data_gb=data_gb, expire_h=expire_h),
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🎁 Claim Free Trial", callback_data="trial:claim")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="trial:back")],
+            [InlineKeyboardButton(t("btn_trial_claim"), callback_data="trial:claim")],
+            [InlineKeyboardButton(t("btn_back"), callback_data="trial:back")],
         ]),
         parse_mode="Markdown"
     )
@@ -215,13 +215,13 @@ async def cb_trial_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def handle_menu_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    if text=="📦 Plans":
+    if text==t("btn_consumer_plans"):
         await cmd_plans(update, ctx)
-    elif text=="📊 My Status":
+    elif text==t("btn_consumer_status"):
         await cmd_mystatus(update, ctx)
-    elif text=="💬 Support":
+    elif text==t("btn_consumer_support"):
         await cmd_support(update, ctx)
-    elif text=="🎁 Free Trial":
+    elif text==t("btn_consumer_trial"):
         await cmd_trial(update, ctx)
 
 def get_handlers():
@@ -231,7 +231,7 @@ def get_handlers():
         CommandHandler("mystatus", cmd_mystatus),
         CommandHandler("support", cmd_support),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_buttons),
-        CallbackQueryHandler(cb_plan_detail, pattern=r"^plan:"),
+        CallbackQueryHandler(cb_plan_detail, pattern=r"^plan:[^:]+$"),
         CallbackQueryHandler(cb_consumer_plans, pattern=r"^consumer:plans$"),
         CallbackQueryHandler(cb_trial_claim, pattern=r"^trial:claim$"),
         CallbackQueryHandler(cb_trial_back, pattern=r"^trial:back$"),

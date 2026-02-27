@@ -1,5 +1,6 @@
 import logging
 import io
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -9,6 +10,7 @@ from telegram.ext import (
 )
 import core.db as db
 import core.ghostgate as gg
+from core.updater import Updater
 from core.currency import (
     get_currencies, save_currencies, get_base_currency, set_base_currency,
     convert, fmt as cfmt
@@ -159,21 +161,38 @@ async def cb_adm_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await query.edit_message_text(t("admin_menu_title"), reply_markup=main_admin_kb(), parse_mode="Markdown")
 
+async def cb_adm_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    if not await _is_admin(query.from_user.id):
+        return
+    await query.edit_message_text(t("adm_update_checking"), reply_markup=back_kb("adm:back"))
+    proxy=settings.BOT_PROXY or ""
+    updater=Updater(check_interval=settings.UPDATE_CHECK_INTERVAL, check_on_startup=settings.CHECK_ON_STARTUP, http_proxy=proxy, https_proxy=proxy)
+    new_version=await updater.check_for_update()
+    if not new_version:
+        await query.edit_message_text(t("adm_update_none"), reply_markup=back_kb("adm:back"))
+        return
+    await query.edit_message_text(t("adm_update_starting", version=new_version), reply_markup=back_kb("adm:back"))
+    success=await updater.download_update(new_version)
+    if not success:
+        await query.edit_message_text(t("adm_update_failed"), reply_markup=back_kb("adm:back"))
+
 async def cb_adm_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     plans = await db.list_plans(active_only=False)
     base = await get_base_currency()
     if not plans:
-        rows = [[InlineKeyboardButton("➕ Create Plan", callback_data="plan:create")], [InlineKeyboardButton("⬅️ Back", callback_data="adm:back")]]
+        rows = [[InlineKeyboardButton(t("adm_create_plan_btn"), callback_data="plan:create")], [InlineKeyboardButton(t("btn_back"), callback_data="adm:back")]]
         await query.edit_message_text(t("no_plans_admin"), reply_markup=InlineKeyboardMarkup(rows))
         return
     rows = []
     for p in plans:
         status = "✅" if p["is_active"] else "❌"
         rows.append([InlineKeyboardButton(f"{status} {p['name']} — {p['price']} {base}", callback_data=f"plan:detail:{p['id']}")])
-    rows.append([InlineKeyboardButton("➕ Create Plan", callback_data="plan:create")])
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:back")])
+    rows.append([InlineKeyboardButton(t("adm_create_plan_btn"), callback_data="plan:create")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     await query.edit_message_text(t("plans_title"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_plan_detail_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -351,8 +370,8 @@ async def cb_adm_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         nav.append(InlineKeyboardButton("▶️", callback_data="subs_page:next"))
     if nav:
         rows.append(nav)
-    rows.append([InlineKeyboardButton("🔍 Search", callback_data="subs:search"), InlineKeyboardButton("➕ Create", callback_data="sub:create")])
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:back")])
+    rows.append([InlineKeyboardButton(t("adm_search_btn"), callback_data="subs:search"), InlineKeyboardButton(t("adm_create_btn"), callback_data="sub:create")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     await query.edit_message_text(f"📋 *Subscriptions* ({total} total)\nPage {page+1}", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_sub_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -489,7 +508,7 @@ async def cb_adm_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for u in users:
         uname = f"@{u['username']}" if u.get("username") else str(u["telegram_id"])
         text += f"• {u.get('first_name') or ''} {uname}\n"
-    rows = [[InlineKeyboardButton("🔍 Search user", callback_data="users:search")], [InlineKeyboardButton("⬅️ Back", callback_data="adm:back")]]
+    rows = [[InlineKeyboardButton(t("adm_search_user_btn"), callback_data="users:search")], [InlineKeyboardButton(t("btn_back"), callback_data="adm:back")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_users_search_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -509,7 +528,7 @@ async def users_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for u in results:
         uname = f"@{u['username']}" if u.get("username") else str(u["telegram_id"])
         rows.append([InlineKeyboardButton(f"{u.get('first_name') or ''} {uname}".strip(), callback_data=f"user:detail:{u['id']}")])
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:users")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:users")])
     await update.message.reply_text(t("adm_search_results"), reply_markup=InlineKeyboardMarkup(rows))
     return ConversationHandler.END
 
@@ -558,20 +577,20 @@ async def cb_user_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("adm_no_orders"), reply_markup=back_kb(f"user:detail:{uid}"))
         return
     rows = [[InlineKeyboardButton(f"{o['plan_name']} — {o['status']} — {o['created_at'][:10]}", callback_data=f"order:detail:{o['id']}")] for o in orders]
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"user:detail:{uid}")])
-    await query.edit_message_text("📋 User orders:", reply_markup=InlineKeyboardMarkup(rows))
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data=f"user:detail:{uid}")])
+    await query.edit_message_text(t("adm_user_orders_title"), reply_markup=InlineKeyboardMarkup(rows))
 
 async def cb_adm_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     pending = await db.get_pending_orders()
     rows = [
-        [InlineKeyboardButton("⏳ Pending/Waiting", callback_data="orders:list:waiting_confirm")],
-        [InlineKeyboardButton("✅ Paid", callback_data="orders:list:paid")],
-        [InlineKeyboardButton("❌ Rejected", callback_data="orders:list:rejected")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="adm:back")],
+        [InlineKeyboardButton(t("adm_orders_pending_waiting"), callback_data="orders:list:waiting_confirm")],
+        [InlineKeyboardButton(t("adm_orders_paid"), callback_data="orders:list:paid")],
+        [InlineKeyboardButton(t("adm_orders_rejected"), callback_data="orders:list:rejected")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="adm:back")],
     ]
-    await query.edit_message_text(f"💰 *Orders*\n\n⏳ Pending: {len(pending)}", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    await query.edit_message_text(t("adm_orders_title", count=len(pending)), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_orders_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -581,7 +600,7 @@ async def cb_orders_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if status=="waiting_confirm":
         orders = [o for o in orders if o["status"] in ("pending", "waiting_confirm")]
     rows = [[InlineKeyboardButton(f"{o.get('plan_name','?')} — {o.get('first_name','?')} — {o['status']}", callback_data=f"order:detail:{o['id']}")] for o in orders[:20]]
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:orders")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:orders")])
     await query.edit_message_text(t("adm_orders_count", count=len(orders)), reply_markup=InlineKeyboardMarkup(rows))
 
 async def cb_order_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -692,9 +711,9 @@ async def cb_adm_admins(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     admins = await db.list_admins()
     rows = [[InlineKeyboardButton(f"👑 {a['telegram_id']}", callback_data=f"admin:detail:{a['telegram_id']}")] for a in admins]
-    rows.append([InlineKeyboardButton("➕ Add Admin", callback_data="admin:add")])
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:back")])
-    await query.edit_message_text(f"👑 *Admins*\nRoot: `{settings.ADMIN_ID}`", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    rows.append([InlineKeyboardButton(t("adm_add_admin_btn"), callback_data="admin:add")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
+    await query.edit_message_text(t("adm_admins_title", root_id=settings.ADMIN_ID), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_admin_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _is_admin(update.effective_user.id):
@@ -728,8 +747,8 @@ async def cb_admin_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     admin_tid = int(query.data.split(":", 2)[2])
     rows = []
     if admin_tid!=settings.ADMIN_ID:
-        rows.append([InlineKeyboardButton("🗑️ Remove", callback_data=f"admin:remove:{admin_tid}")])
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:admins")])
+        rows.append([InlineKeyboardButton(t("adm_remove_btn"), callback_data=f"admin:remove:{admin_tid}")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:admins")])
     await query.edit_message_text(f"👑 Admin: `{admin_tid}`", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_admin_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -779,10 +798,10 @@ async def cb_set_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     card_name = await db.get_setting("card_holder", "(not set)")
     card_enabled = await db.get_setting("card_enabled", "0")=="1"
     rows = [
-        [InlineKeyboardButton(f"Toggle: {'✅ Enabled' if card_enabled else '❌ Disabled'}", callback_data="set:card_toggle")],
-        [InlineKeyboardButton("✏️ Edit Card Number", callback_data="set:card_num")],
-        [InlineKeyboardButton("✏️ Edit Holder Name", callback_data="set:card_name")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="adm:settings")],
+        [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if card_enabled else t("adm_disabled")), callback_data="set:card_toggle")],
+        [InlineKeyboardButton(t("btn_edit_card_num"), callback_data="set:card_num")],
+        [InlineKeyboardButton(t("btn_edit_card_name"), callback_data="set:card_name")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
     ]
     await query.edit_message_text(f"💳 *Card-to-Card*\n\nCard: `{card_num}`\nHolder: {card_name}", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
@@ -825,10 +844,10 @@ async def cb_set_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     mid = await db.get_setting("cryptomus_merchant_id", "(not set)")
     enabled = await db.get_setting("cryptomus_enabled", "0")=="1"
     rows = [
-        [InlineKeyboardButton(f"Toggle: {'✅ Enabled' if enabled else '❌ Disabled'}", callback_data="set:crypto_toggle")],
-        [InlineKeyboardButton("✏️ Merchant ID", callback_data="set:crypto_mid")],
-        [InlineKeyboardButton("✏️ API Key", callback_data="set:crypto_key")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="adm:settings")],
+        [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:crypto_toggle")],
+        [InlineKeyboardButton(t("btn_edit_mid"), callback_data="set:crypto_mid")],
+        [InlineKeyboardButton(t("btn_edit_api_key"), callback_data="set:crypto_key")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
     ]
     await query.edit_message_text(f"🪙 *Cryptomus*\n\nMerchant ID: `{mid}`", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
@@ -870,10 +889,10 @@ async def cb_set_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     enabled = await db.get_setting("requests_enabled", "0")=="1"
     rows = [
-        [InlineKeyboardButton(f"Toggle: {'✅ Enabled' if enabled else '❌ Disabled'}", callback_data="set:req_toggle")],
-        [InlineKeyboardButton("⬅️ Back", callback_data="adm:settings")],
+        [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:req_toggle")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
     ]
-    await query.edit_message_text("🙋 *Request Flow*", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    await query.edit_message_text(t("adm_requests_title"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_req_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -922,8 +941,8 @@ async def cb_set_currencies(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     currencies = await get_currencies()
     base = await get_base_currency()
     if not currencies:
-        rows = [[InlineKeyboardButton("➕ Add Currency", callback_data="curr:add"), InlineKeyboardButton("📌 Set Base", callback_data="curr:set_base")]]
-        rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:settings")])
+        rows = [[InlineKeyboardButton(t("btn_curr_add"), callback_data="curr:add"), InlineKeyboardButton(t("btn_curr_set_base"), callback_data="curr:set_base")]]
+        rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")])
         await query.edit_message_text(t("curr_no_currencies", base=base), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
         return
     await query.edit_message_text(t("curr_title", base=base), reply_markup=currencies_kb(currencies, base, "adm:settings"), parse_mode="Markdown")
@@ -1102,7 +1121,7 @@ async def subs_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t("adm_no_subs_found"), reply_markup=back_kb("adm:subs"))
         return ConversationHandler.END
     rows = [[InlineKeyboardButton(s.get("comment") or s["id"][:12], callback_data=f"sub:detail:{s['id']}")] for s in results[:20]]
-    rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:subs")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:subs")])
     await update.message.reply_text(t("adm_search_results"), reply_markup=InlineKeyboardMarkup(rows))
     return ConversationHandler.END
 
@@ -1116,13 +1135,13 @@ async def cb_set_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     expire_h = int(await db.get_setting("trial_expire_seconds", "86400"))//3600
     node_ids = json.loads(await db.get_setting("trial_node_ids", "[]"))
     await query.edit_message_text(
-        t("trial_settings", status="✅ Enabled" if enabled else "❌ Disabled", data_gb=data_gb, expire_h=expire_h, node_count=len(node_ids)),
+        t("trial_settings", status=t("adm_enabled") if enabled else t("adm_disabled"), data_gb=data_gb, expire_h=expire_h, node_count=len(node_ids)),
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"Toggle: {'✅ Enabled' if enabled else '❌ Disabled'}", callback_data="set:trial_toggle")],
-            [InlineKeyboardButton("✏️ Set Data GB", callback_data="set:trial_data")],
-            [InlineKeyboardButton("✏️ Set Expire Time", callback_data="set:trial_expire")],
-            [InlineKeyboardButton("🖥️ Configure Nodes", callback_data="set:trial_nodes")],
-            [InlineKeyboardButton("⬅️ Back", callback_data="adm:settings")],
+            [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:trial_toggle")],
+            [InlineKeyboardButton(t("adm_trial_set_data"), callback_data="set:trial_data")],
+            [InlineKeyboardButton(t("adm_trial_set_expire"), callback_data="set:trial_expire")],
+            [InlineKeyboardButton(t("adm_trial_set_nodes"), callback_data="set:trial_nodes")],
+            [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
         ]),
         parse_mode="Markdown"
     )
@@ -1178,7 +1197,7 @@ async def cb_set_trial_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     nodes = await gg.list_nodes()
     stored = json.loads(await db.get_setting("trial_node_ids", "[]"))
     ctx.user_data["trial_nodes"]=list(stored)
-    await query.edit_message_text("🎁 Select nodes for trial subscription:", reply_markup=node_select_kb(nodes, stored, "trial:nodes_done", "cancel"))
+    await query.edit_message_text(t("adm_trial_nodes_prompt"), reply_markup=node_select_kb(nodes, stored, "trial:nodes_done", "cancel"))
     return SETTINGS_TRIAL_NODES
 
 async def trial_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1192,7 +1211,7 @@ async def trial_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         selected.append(nid)
     ctx.user_data["trial_nodes"]=selected
     nodes = await gg.list_nodes()
-    await query.edit_message_text("🎁 Select nodes for trial subscription:", reply_markup=node_select_kb(nodes, selected, "trial:nodes_done", "cancel"))
+    await query.edit_message_text(t("adm_trial_nodes_prompt"), reply_markup=node_select_kb(nodes, selected, "trial:nodes_done", "cancel"))
     return SETTINGS_TRIAL_NODES
 
 async def trial_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1322,4 +1341,5 @@ def get_handlers():
         CallbackQueryHandler(cb_curr_make_base, pattern=r"^curr:make_base:"),
         CallbackQueryHandler(cb_set_trial, pattern=r"^set:trial$"),
         CallbackQueryHandler(cb_trial_toggle, pattern=r"^set:trial_toggle$"),
+        CallbackQueryHandler(cb_adm_update, pattern=r"^adm:update$"),
     ]
