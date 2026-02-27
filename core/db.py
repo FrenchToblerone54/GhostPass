@@ -30,7 +30,9 @@ async def init_db():
     def _sync():
         with _open() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version < 1:
+            required_tables={"users", "plans", "orders", "admins", "settings", "trial_claims"}
+            existing_tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if version<1 or not required_tables.issubset(existing_tables):
                 _migrate_v1(db)
     await asyncio.to_thread(_sync)
 
