@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     BTCPAY_URL: str = ""
     BTCPAY_STORE_ID: str = ""
     BTCPAY_API_KEY: str = ""
+    USDT_TRC20_ADDRESS: str = ""
+    USDT_BSC_ADDRESS: str = ""
+    USDT_POLYGON_ADDRESS: str = ""
     SYNC_INTERVAL: int = 60
     LANGUAGE: str = "en"
     AUTO_UPDATE: bool = True
