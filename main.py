@@ -25,6 +25,9 @@ async def _run_once():
             fails=0
             while True:
                 await asyncio.sleep(30)
+                polling_task=getattr(app.updater, "_Updater__polling_task", None)
+                if not app.updater.running or polling_task is None or polling_task.done():
+                    raise RuntimeError("Updater polling task stopped")
                 try:
                     await asyncio.wait_for(app.bot.get_me(), timeout=10)
                     fails=0
