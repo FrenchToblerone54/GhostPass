@@ -231,7 +231,7 @@ def get_handlers():
         CommandHandler("mystatus", cmd_mystatus),
         CommandHandler("support", cmd_support),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_buttons),
-        CallbackQueryHandler(cb_plan_detail, pattern=r"^plan:[^:]+$"),
+        CallbackQueryHandler(cb_plan_detail, pattern=r"^plan:[A-Za-z0-9_-]{20}$"),
         CallbackQueryHandler(cb_consumer_plans, pattern=r"^consumer:plans$"),
         CallbackQueryHandler(cb_trial_claim, pattern=r"^trial:claim$"),
         CallbackQueryHandler(cb_trial_back, pattern=r"^trial:back$"),
