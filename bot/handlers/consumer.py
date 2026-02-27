@@ -77,7 +77,36 @@ async def cmd_mystatus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"⏰ Expires: {expire_at}\n"
             f"🔗 Link: `{sub_url}`"
         )
-        await update.message.reply_text(text, parse_mode="Markdown")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Regenerate Link", callback_data=f"sub:regen:{sub_id}")]])
+        await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+
+async def cb_regen_sub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    sub_id = query.data.split(":", 2)[2]
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Yes", callback_data=f"sub:regen_yes:{sub_id}"),
+        InlineKeyboardButton("❌ No", callback_data="sub:regen_no"),
+    ]])
+    await query.edit_message_text(t("regen_confirm"), reply_markup=kb)
+
+async def cb_regen_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    old_sub_id = query.data.split(":", 2)[2]
+    result = await gg.regen_subscription_id(old_sub_id)
+    if not result:
+        await query.edit_message_text(t("regen_fail"))
+        return
+    new_id = result["new_id"]
+    new_url = result["url"]
+    await db.update_ghostgate_sub_id(old_sub_id, new_id)
+    await query.edit_message_text(t("regen_success", url=new_url), parse_mode="Markdown")
+
+async def cb_regen_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.delete_message()
 
 async def cmd_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     support = await db.get_setting("support_username", "")
@@ -206,4 +235,7 @@ def get_handlers():
         CallbackQueryHandler(cb_consumer_plans, pattern=r"^consumer:plans$"),
         CallbackQueryHandler(cb_trial_claim, pattern=r"^trial:claim$"),
         CallbackQueryHandler(cb_trial_back, pattern=r"^trial:back$"),
+        CallbackQueryHandler(cb_regen_sub, pattern=r"^sub:regen:[^_]"),
+        CallbackQueryHandler(cb_regen_confirm, pattern=r"^sub:regen_yes:"),
+        CallbackQueryHandler(cb_regen_cancel, pattern=r"^sub:regen_no$"),
     ]

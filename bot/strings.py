@@ -83,6 +83,9 @@ _EN = {
     "trial_settings": "🎁 *Trial Subscription*\n\nStatus: {status}\nData: {data_gb} GB\nExpiry: {expire_h}h after first use\nNodes: {node_count} configured",
     "trial_data_prompt": "Enter trial data limit in GB (e.g. 0.5):",
     "trial_expire_prompt": "Enter trial duration in hours after first use (e.g. 24):",
+    "regen_confirm": "⚠️ This will generate a new subscription link. Your old link will stop working immediately.\n\nAre you sure?",
+    "regen_success": "✅ Your subscription link has been regenerated!\n\n🔗 New Link: `{url}`\n\nImport this link into your VPN app.",
+    "regen_fail": "❌ Failed to regenerate subscription link. Please try again later.",
 }
 
 _FA = {
@@ -168,6 +171,9 @@ _FA = {
     "trial_settings": "🎁 *اشتراک آزمایشی*\n\nوضعیت: {status}\nحجم: {data_gb} گیگابایت\nانقضا: {expire_h} ساعت پس از اولین اتصال\nنودها: {node_count} پیکربندی‌شده",
     "trial_data_prompt": "حجم آزمایشی را به گیگابایت وارد کنید (مثال: ۰.۵):",
     "trial_expire_prompt": "مدت آزمایشی را به ساعت وارد کنید (مثال: ۲۴):",
+    "regen_confirm": "⚠️ این کار یک لینک اشتراک جدید ایجاد می‌کند. لینک قبلی بلافاصله غیرفعال می‌شود.\n\nمطمئنید؟",
+    "regen_success": "✅ لینک اشتراک شما تجدید شد!\n\n🔗 لینک جدید: `{url}`\n\nاین لینک را در اپلیکیشن VPN وارد کنید.",
+    "regen_fail": "❌ تجدید لینک اشتراک ناموفق بود. لطفاً دوباره امتحان کنید.",
 }
 
 def t(key, **kwargs):

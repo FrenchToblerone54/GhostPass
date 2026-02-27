@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import shutil
 import sys
 import hashlib
 import json
@@ -10,7 +11,7 @@ from pathlib import Path
 logger=logging.getLogger(__name__)
 
 GITHUB_REPO="FrenchToblerone54/GhostPass"
-VERSION="v0.1.6"
+VERSION="v0.1.7"
 
 class Updater:
     def __init__(self, check_interval=300, check_on_startup=True, http_proxy="", https_proxy=""):
@@ -102,7 +103,7 @@ class Updater:
                 logger.info("Checksum verified")
             else:
                 logger.warning("Could not download checksum, skipping verification")
-            executable_path=sys.argv[0]
+            executable_path=shutil.which(sys.argv[0]) or os.path.abspath(sys.argv[0])
             logger.info(f"Successfully updated to {new_version}, restarting...")
             os.execv("/bin/bash", ["/bin/bash", "-c",
                 f"sleep 0.5; mv '{executable_path}' '{executable_path}.old' 2>/dev/null; mv '{binary_path}' '{executable_path}'; exec '{executable_path}' "+" ".join(sys.argv[1:])])
@@ -113,7 +114,6 @@ class Updater:
 
     async def manual_update(self):
         import subprocess
-        import shutil
         if not self.http_proxy:
             self.http_proxy=os.environ.get("HTTP_PROXY", os.environ.get("http_proxy", ""))
         if not self.https_proxy:
@@ -141,7 +141,7 @@ class Updater:
                 print("Checksum verification failed!")
                 return
             print("Checksum verified.")
-        executable_path=sys.argv[0]
+        executable_path=shutil.which(sys.argv[0]) or os.path.abspath(sys.argv[0])
         shutil.move(executable_path, f"{executable_path}.old")
         shutil.move(binary_path, executable_path)
         os.chmod(executable_path, 0o755)

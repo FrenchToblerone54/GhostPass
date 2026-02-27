@@ -98,6 +98,10 @@ async def get_subscription_stats(sub_id):
     r = await _get(f"subscriptions/{sub_id}/stats")
     return r.json() if r else None
 
+async def regen_subscription_id(sub_id):
+    r = await _post(f"subscriptions/{sub_id}/regen-id")
+    return r.json() if r else None
+
 async def get_subscription_qr_bytes(sub_id):
     for attempt in range(3):
         try:
