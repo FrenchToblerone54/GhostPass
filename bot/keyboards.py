@@ -80,13 +80,15 @@ def method_select_kb(selected_methods, done_cb, back_cb):
     rows.append([InlineKeyboardButton(t("btn_done"), callback_data=done_cb), InlineKeyboardButton(t("btn_back"), callback_data=back_cb)])
     return InlineKeyboardMarkup(rows)
 
-def node_select_kb(nodes, selected_ids, done_cb, back_cb):
+def node_select_kb(nodes, selected_ids, done_cb, back_cb, all_cb="", none_cb=""):
     rows = []
     for node in nodes:
         for inbound in node.get("inbounds", []):
             label = inbound.get("name") or f"Inbound #{inbound['id']}"
             check = "✅" if inbound["id"] in selected_ids else "⬜"
             rows.append([InlineKeyboardButton(f"{check} {node['name']} / {label}", callback_data=f"node_toggle:{inbound['id']}")])
+    if all_cb and none_cb:
+        rows.append([InlineKeyboardButton(t("btn_select_all"), callback_data=all_cb), InlineKeyboardButton(t("btn_unselect_all"), callback_data=none_cb)])
     rows.append([InlineKeyboardButton(t("btn_done"), callback_data=done_cb), InlineKeyboardButton(t("btn_back"), callback_data=back_cb)])
     return InlineKeyboardMarkup(rows)
 

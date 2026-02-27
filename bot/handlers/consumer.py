@@ -51,7 +51,10 @@ async def _show_plans(update, ctx):
                     price=f"{i//1000}k"
             except Exception:
                 pass
-        text += f"\n*{p['name']}* — {p['data_gb']} GB / {p['days']}d — {price} {base}"
+        data_text=t("adm_unlimited") if float(p["data_gb"])==0 else f"{p['data_gb']} GB"
+        days_text=t("adm_no_expiry") if int(p["days"])==0 else f"{p['days']}d"
+        ip_text=t("adm_unlimited") if int(p["ip_limit"])==0 else str(p["ip_limit"])
+        text += f"\n*{p['name']}* — {data_text} / {days_text} / {ip_text} — {price} {base}"
     kb = plans_kb(plans, base)
     if update.message:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
@@ -80,10 +83,10 @@ async def cmd_mystatus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             continue
         data_used_gb = (stats.get("used_bytes") or 0)/1073741824
         data_total_gb = stats.get("data_gb") or 0
-        expire_at = stats.get("expire_at") or "No Expiry"
+        expire_at = stats.get("expire_at") or t("adm_no_expiry")
         base = settings.GHOSTGATE_URL.rsplit("/", 1)[0] if "/" in settings.GHOSTGATE_URL else settings.GHOSTGATE_URL
         sub_url = f"{base}/sub/{sub_id}"
-        data_str = "Unlimited" if data_total_gb==0 else f"{data_total_gb} GB"
+        data_str = t("adm_unlimited") if data_total_gb==0 else f"{data_total_gb} GB"
         text = (
             f"📦 *{order['plan_name']}*\n"
             f"📊 Data: {data_used_gb:.2f} GB / {data_str}\n"
@@ -144,7 +147,10 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     requests_enabled = await db.get_setting("requests_enabled", "0")=="1"
     manual_enabled = await db.get_setting("manual_enabled", "1")=="1"
     support = await db.get_setting("support_username", "")
-    text = t("plan_detail", name=plan["name"], data_gb=plan["data_gb"], days=plan["days"], ip_limit=plan["ip_limit"])
+    data_text=t("adm_unlimited") if float(plan["data_gb"])==0 else f"{plan['data_gb']} GB"
+    days_text=t("adm_no_expiry") if int(plan["days"])==0 else str(plan["days"])
+    ip_text=t("adm_unlimited") if int(plan["ip_limit"])==0 else str(plan["ip_limit"])
+    text = t("plan_detail", name=plan["name"], data_text=data_text, days_text=days_text, ip_text=ip_text)
     prices = ""
     if card_enabled:
         prices += f"\n{t('plan_price_line_card', price=await fmt_price_for_method(plan['price'], 'card'))}"
