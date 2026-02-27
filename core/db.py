@@ -14,18 +14,16 @@ async def _open():
         await db.execute("PRAGMA foreign_keys=ON")
         yield db
 
-async def init_db():
-    async with _open() as db:
-        await db.executescript("""
-CREATE TABLE IF NOT EXISTS users (
+async def _migrate_v1(db):
+    await db.execute("""CREATE TABLE IF NOT EXISTS users (
     id          TEXT PRIMARY KEY,
     telegram_id INTEGER UNIQUE NOT NULL,
     username    TEXT,
     first_name  TEXT,
     is_banned   INTEGER DEFAULT 0,
     created_at  TEXT DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS plans (
+)""")
+    await db.execute("""CREATE TABLE IF NOT EXISTS plans (
     id          TEXT PRIMARY KEY,
     name        TEXT NOT NULL,
     data_gb     REAL NOT NULL,
@@ -36,8 +34,8 @@ CREATE TABLE IF NOT EXISTS plans (
     is_active   INTEGER DEFAULT 1,
     sort_order  INTEGER DEFAULT 0,
     created_at  TEXT DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS orders (
+)""")
+    await db.execute("""CREATE TABLE IF NOT EXISTS orders (
     id                   TEXT PRIMARY KEY,
     user_id              TEXT NOT NULL REFERENCES users(id),
     plan_id              TEXT NOT NULL REFERENCES plans(id),
@@ -50,24 +48,31 @@ CREATE TABLE IF NOT EXISTS orders (
     receipt_file_id      TEXT,
     created_at           TEXT DEFAULT (datetime('now')),
     paid_at              TEXT
-);
-CREATE TABLE IF NOT EXISTS admins (
+)""")
+    await db.execute("""CREATE TABLE IF NOT EXISTS admins (
     telegram_id INTEGER PRIMARY KEY,
     added_by    INTEGER NOT NULL,
     permissions TEXT NOT NULL DEFAULT '["view"]',
     created_at  TEXT DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS settings (
+)""")
+    await db.execute("""CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
-);
-CREATE TABLE IF NOT EXISTS trial_claims (
-    user_id         TEXT PRIMARY KEY REFERENCES users(id),
-    claimed_at      TEXT DEFAULT (datetime('now')),
+)""")
+    await db.execute("""CREATE TABLE IF NOT EXISTS trial_claims (
+    user_id          TEXT PRIMARY KEY REFERENCES users(id),
+    claimed_at       TEXT DEFAULT (datetime('now')),
     ghostgate_sub_id TEXT
-);
-""")
-        await db.commit()
+)""")
+    await db.execute(f"PRAGMA user_version={1}")
+    await db.commit()
+
+async def init_db():
+    async with _open() as db:
+        row = await (await db.execute("PRAGMA user_version")).fetchone()
+        version = row[0] if row else 0
+        if version < 1:
+            await _migrate_v1(db)
 
 async def upsert_user(telegram_id, username, first_name):
     async with _open() as db:

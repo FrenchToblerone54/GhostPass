@@ -76,7 +76,7 @@ async def wizard_skip_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     ctx.user_data["wizard_support"] = ""
-    await query.edit_message_text(t("wizard_step3a"))
+    await query.edit_message_text(t("wizard_step3a"), reply_markup=skip_kb("wizard:skip_card"))
     return WIZARD_CARD_NUM
 
 async def wizard_card_num(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -94,14 +94,14 @@ async def wizard_skip_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     ctx.user_data["wizard_card_num"] = ""
     ctx.user_data["wizard_card_name"] = ""
-    await query.edit_message_text(t("wizard_step3c"))
+    await query.edit_message_text(t("wizard_step3c"), reply_markup=skip_kb("wizard:skip_crypto"))
     return WIZARD_CRYPTO_MID
 
 async def wizard_skip_card_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     ctx.user_data["wizard_card_name"] = ""
-    await query.edit_message_text(t("wizard_step3c"))
+    await query.edit_message_text(t("wizard_step3c"), reply_markup=skip_kb("wizard:skip_crypto"))
     return WIZARD_CRYPTO_MID
 
 async def wizard_crypto_mid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
