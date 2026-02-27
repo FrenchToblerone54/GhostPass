@@ -9,7 +9,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.ext import ContextTypes, CallbackQueryHandler
 import core.db as db
 import core.ghostgate as gg
-from core.currency import price_for_method, fmt
+from core.currency import price_for_method, price_for_code, fmt
 from bot.strings import t
 from bot.guards import ensure_force_join
 from config import settings
@@ -102,7 +102,8 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("service_unavailable"))
         return
     amount, code, decimals = await price_for_method(plan["price"], "crypto")
-    if use_ghostpayments and code.upper()!=gp_token:
+    gp_amount, gp_code, gp_decimals = await price_for_code(plan["price"], gp_token) if use_ghostpayments else (None, "", 0)
+    if use_ghostpayments and gp_amount is None:
         if use_btcpay or (merchant_id and api_key):
             use_ghostpayments=False
         else:
@@ -114,7 +115,7 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     order_id = await db.create_order(uid, plan_id, "crypto", float(amount), code)
     try:
         if use_ghostpayments:
-            inv=await create_invoice_ghostpayments(gp_url, gp_key, gp_chain, gp_token, fmt(amount, decimals, code), order_id)
+            inv=await create_invoice_ghostpayments(gp_url, gp_key, gp_chain, gp_token, fmt(gp_amount, gp_decimals, gp_code), order_id)
             invoice_id=inv.get("invoice_id") or inv.get("id")
             pay_url=inv.get("payment_url")
         elif use_btcpay:
