@@ -37,7 +37,8 @@ from bot.states import (
     USER_SEARCH, SUB_SEARCH,
     ADMIN_REJECT_REASON,
     CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE,
-    SETTINGS_TRIAL_DATA, SETTINGS_TRIAL_EXPIRE, SETTINGS_TRIAL_NODES
+    SETTINGS_TRIAL_DATA, SETTINGS_TRIAL_EXPIRE, SETTINGS_TRIAL_NODES,
+    SETTINGS_USDT_TRC20, SETTINGS_USDT_BSC, SETTINGS_USDT_POLYGON
 )
 from config import settings
 
@@ -1053,6 +1054,59 @@ async def settings_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
 
+async def cb_set_usdt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    trc20 = await db.get_setting("usdt_trc20_address", settings.USDT_TRC20_ADDRESS or "-")
+    bsc = await db.get_setting("usdt_bsc_address", settings.USDT_BSC_ADDRESS or "-")
+    polygon = await db.get_setting("usdt_polygon_address", settings.USDT_POLYGON_ADDRESS or "-")
+    rows = [
+        [InlineKeyboardButton("TRC20", callback_data="set:usdt_trc20")],
+        [InlineKeyboardButton("BSC", callback_data="set:usdt_bsc")],
+        [InlineKeyboardButton("POLYGON", callback_data="set:usdt_polygon")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
+    ]
+    await query.edit_message_text(t("adm_usdt_title", trc20=trc20, bsc=bsc, polygon=polygon), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+async def cb_set_usdt_trc20(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_enter_usdt_trc20"), reply_markup=cancel_kb())
+    return SETTINGS_USDT_TRC20
+
+async def settings_usdt_trc20(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await db.set_setting("usdt_trc20_address", update.message.text.strip())
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:usdt"))
+    return ConversationHandler.END
+
+async def cb_set_usdt_bsc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_enter_usdt_bsc"), reply_markup=cancel_kb())
+    return SETTINGS_USDT_BSC
+
+async def settings_usdt_bsc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await db.set_setting("usdt_bsc_address", update.message.text.strip())
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:usdt"))
+    return ConversationHandler.END
+
+async def cb_set_usdt_polygon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_enter_usdt_polygon"), reply_markup=cancel_kb())
+    return SETTINGS_USDT_POLYGON
+
+async def settings_usdt_polygon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await db.set_setting("usdt_polygon_address", update.message.text.strip())
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:usdt"))
+    return ConversationHandler.END
+
 async def cb_set_currencies(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1384,6 +1438,9 @@ def get_main_conv_handler():
         SETTINGS_CRYPTO_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_crypto_key)],
         SETTINGS_SUPPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_support)],
         SETTINGS_SYNC: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_sync)],
+        SETTINGS_USDT_TRC20: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_trc20)],
+        SETTINGS_USDT_BSC: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_bsc)],
+        SETTINGS_USDT_POLYGON: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_polygon)],
         USER_SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, users_search)],
         SUB_SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, subs_search)],
         ADMIN_REJECT_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reject_reason), CallbackQueryHandler(cb_reject_skip, pattern=r"^reject:skip$")],
@@ -1415,6 +1472,9 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_crypto_key, pattern=r"^set:crypto_key$"),
         CallbackQueryHandler(cb_set_support, pattern=r"^set:support$"),
         CallbackQueryHandler(cb_set_sync, pattern=r"^set:sync$"),
+        CallbackQueryHandler(cb_set_usdt_trc20, pattern=r"^set:usdt_trc20$"),
+        CallbackQueryHandler(cb_set_usdt_bsc, pattern=r"^set:usdt_bsc$"),
+        CallbackQueryHandler(cb_set_usdt_polygon, pattern=r"^set:usdt_polygon$"),
         CallbackQueryHandler(cb_curr_add, pattern=r"^curr:add$"),
         CallbackQueryHandler(cb_set_trial_data, pattern=r"^set:trial_data$"),
         CallbackQueryHandler(cb_set_trial_expire, pattern=r"^set:trial_expire$"),
@@ -1456,6 +1516,7 @@ def get_handlers():
         CallbackQueryHandler(cb_crypto_toggle, pattern=r"^set:crypto_toggle$"),
         CallbackQueryHandler(cb_set_requests, pattern=r"^set:requests$"),
         CallbackQueryHandler(cb_req_toggle, pattern=r"^set:req_toggle$"),
+        CallbackQueryHandler(cb_set_usdt, pattern=r"^set:usdt$"),
         CallbackQueryHandler(cb_set_currencies, pattern=r"^set:currencies$"),
         CallbackQueryHandler(cb_curr_detail, pattern=r"^curr:detail:"),
         CallbackQueryHandler(cb_curr_delete, pattern=r"^curr:delete:"),
