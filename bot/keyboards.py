@@ -47,8 +47,16 @@ def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="consumer:plans")])
     return InlineKeyboardMarkup(rows)
 
-def plans_kb(plans, base_currency="IRT"):
+def plans_kb(plans, base_currency="IRT", page=0, total=0, per_page=0):
     rows = [[InlineKeyboardButton(f"{t('btn_buy_plan', name=p['name'])} — {_fmt_plan_price(p['price'], base_currency)} {base_currency}", callback_data=f"plan:{p['id']}")] for p in plans]
+    if per_page>0 and total>per_page:
+        nav=[]
+        if page>0:
+            nav.append(InlineKeyboardButton("◀️", callback_data="consumer:plans_page:prev"))
+        if (page+1)*per_page<total:
+            nav.append(InlineKeyboardButton("▶️", callback_data="consumer:plans_page:next"))
+        if nav:
+            rows.append(nav)
     return InlineKeyboardMarkup(rows)
 
 def settings_kb():
@@ -62,6 +70,7 @@ def settings_kb():
         [InlineKeyboardButton(t("btn_set_usdt"), callback_data="set:usdt")],
         [InlineKeyboardButton(t("btn_set_trial"), callback_data="set:trial")],
         [InlineKeyboardButton(t("btn_set_sync"), callback_data="set:sync")],
+        [InlineKeyboardButton(t("btn_set_plans_pagination"), callback_data="set:plan_pagination")],
         [InlineKeyboardButton(t("btn_set_force_join"), callback_data="set:force_join")],
         [InlineKeyboardButton(t("btn_set_plan_start_after_use"), callback_data="set:plan_start_after_use")],
         [InlineKeyboardButton(t("btn_set_trial_start_after_use"), callback_data="set:trial_start_after_use")],

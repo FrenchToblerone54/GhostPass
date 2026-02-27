@@ -34,7 +34,7 @@ from bot.states import (
     ADMIN_MANUAL_SUB_IP, ADMIN_MANUAL_SUB_NODES,
     SETTINGS_CARD_NUM, SETTINGS_CARD_NAME,
     SETTINGS_CRYPTO_MID, SETTINGS_CRYPTO_KEY,
-    SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL, SETTINGS_UPDATE_HTTP_PROXY, SETTINGS_UPDATE_HTTPS_PROXY, SETTINGS_FORCE_JOIN_CHANNEL, SETTINGS_GHOSTPAY_URL, SETTINGS_GHOSTPAY_KEY,
+    SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL, SETTINGS_UPDATE_HTTP_PROXY, SETTINGS_UPDATE_HTTPS_PROXY, SETTINGS_FORCE_JOIN_CHANNEL, SETTINGS_GHOSTPAY_URL, SETTINGS_GHOSTPAY_KEY, SETTINGS_PLAN_PAGE_SIZE_CONSUMER, SETTINGS_PLAN_PAGE_SIZE_ADMIN,
     USER_SEARCH, SUB_SEARCH,
     ADMIN_REJECT_REASON,
     CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE,
@@ -44,6 +44,18 @@ from bot.states import (
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+async def _get_page_size_setting(key, default_value):
+    raw=await db.get_setting(key, str(default_value))
+    try:
+        val=int(raw)
+    except Exception:
+        return default_value
+    if val<1:
+        return 1
+    if val>50:
+        return 50
+    return val
 
 def _fmt_plan_price_display(price, base):
     if base=="IRT":
@@ -228,20 +240,46 @@ async def cb_adm_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     plans = await db.list_plans(active_only=False)
     base = await get_base_currency()
+    per_page=await _get_page_size_setting("plans_page_size_admin", 10)
+    total=len(plans)
+    max_page=max((total-1)//per_page, 0)
+    page=int(ctx.user_data.get("adm_plans_page", 0))
+    page=max(0, min(page, max_page))
+    ctx.user_data["adm_plans_page"]=page
     if not plans:
         rows = [[InlineKeyboardButton(t("adm_create_plan_btn"), callback_data="plan:create")], [InlineKeyboardButton(t("btn_back"), callback_data="adm:back")]]
         await query.edit_message_text(t("no_plans_admin"), reply_markup=InlineKeyboardMarkup(rows))
         return
+    start=page*per_page
+    page_plans=plans[start:start+per_page]
     rows = []
-    for p in plans:
+    for p in page_plans:
         status = "✅" if p["is_active"] else "❌"
         rows.append([InlineKeyboardButton(f"{status} {p['name']} — {_fmt_plan_price_display(p['price'], base)} {base}", callback_data=f"plan:detail:{p['id']}")])
+    nav=[]
+    if page>0:
+        nav.append(InlineKeyboardButton("◀️", callback_data="adm:plans_page:prev"))
+    if (page+1)*per_page<total:
+        nav.append(InlineKeyboardButton("▶️", callback_data="adm:plans_page:next"))
+    if nav:
+        rows.append(nav)
     rows.append([InlineKeyboardButton(t("adm_create_plan_btn"), callback_data="plan:create")])
     rows.append([InlineKeyboardButton(t("adm_bulk_create_btn"), callback_data="plan:bulk_create")])
     rows.append([InlineKeyboardButton(t("adm_bulk_nodes_btn"), callback_data="plans:bulk_nodes")])
     rows.append([InlineKeyboardButton(t("adm_bulk_delete_btn"), callback_data="plans:bulk_delete")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
-    await query.edit_message_text(t("plans_title"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    title=t("plans_title")
+    if total>per_page:
+        title += f"\n\n{t('plans_page_info', page=page+1, pages=max_page+1)}"
+    await query.edit_message_text(title, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+async def cb_adm_plans_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    direction=query.data.split(":", 2)[2]
+    page=int(ctx.user_data.get("adm_plans_page", 0))
+    ctx.user_data["adm_plans_page"]=page-1 if direction=="prev" else page+1
+    await cb_adm_plans(update, ctx)
 
 async def cb_plan_detail_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1465,6 +1503,60 @@ async def settings_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
 
+async def cb_set_plan_pagination(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    consumer=await _get_page_size_setting("plans_page_size_consumer", 8)
+    admin=await _get_page_size_setting("plans_page_size_admin", 10)
+    rows=[
+        [InlineKeyboardButton(t("adm_plan_page_size_consumer_btn"), callback_data="set:plan_page_size_consumer")],
+        [InlineKeyboardButton(t("adm_plan_page_size_admin_btn"), callback_data="set:plan_page_size_admin")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
+    ]
+    await query.edit_message_text(t("adm_plan_pagination_title", consumer=consumer, admin=admin), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+async def cb_set_plan_page_size_consumer(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    current=await _get_page_size_setting("plans_page_size_consumer", 8)
+    await query.edit_message_text(t("adm_plan_page_size_consumer_prompt", current=current), reply_markup=cancel_kb())
+    return SETTINGS_PLAN_PAGE_SIZE_CONSUMER
+
+async def settings_plan_page_size_consumer(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val=int(update.message.text.strip())
+        if val<1 or val>50:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_PLAN_PAGE_SIZE_CONSUMER
+    await db.set_setting("plans_page_size_consumer", str(val))
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:plan_pagination"))
+    return ConversationHandler.END
+
+async def cb_set_plan_page_size_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    current=await _get_page_size_setting("plans_page_size_admin", 10)
+    await query.edit_message_text(t("adm_plan_page_size_admin_prompt", current=current), reply_markup=cancel_kb())
+    return SETTINGS_PLAN_PAGE_SIZE_ADMIN
+
+async def settings_plan_page_size_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val=int(update.message.text.strip())
+        if val<1 or val>50:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_PLAN_PAGE_SIZE_ADMIN
+    await db.set_setting("plans_page_size_admin", str(val))
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:plan_pagination"))
+    return ConversationHandler.END
+
 async def cb_set_force_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1981,6 +2073,8 @@ def get_main_conv_handler():
         SETTINGS_FORCE_JOIN_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_force_join_channel)],
         SETTINGS_UPDATE_HTTP_PROXY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_update_http_proxy)],
         SETTINGS_UPDATE_HTTPS_PROXY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_update_https_proxy)],
+        SETTINGS_PLAN_PAGE_SIZE_CONSUMER: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_plan_page_size_consumer)],
+        SETTINGS_PLAN_PAGE_SIZE_ADMIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_plan_page_size_admin)],
         SETTINGS_USDT_TRC20: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_trc20)],
         SETTINGS_USDT_BSC: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_bsc)],
         SETTINGS_USDT_POLYGON: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_polygon)],
@@ -2019,6 +2113,8 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_gp_key, pattern=r"^set:gp_key$"),
         CallbackQueryHandler(cb_set_support, pattern=r"^set:support$"),
         CallbackQueryHandler(cb_set_sync, pattern=r"^set:sync$"),
+        CallbackQueryHandler(cb_set_plan_page_size_consumer, pattern=r"^set:plan_page_size_consumer$"),
+        CallbackQueryHandler(cb_set_plan_page_size_admin, pattern=r"^set:plan_page_size_admin$"),
         CallbackQueryHandler(cb_set_force_join, pattern=r"^set:force_join$"),
         CallbackQueryHandler(cb_force_join_toggle, pattern=r"^set:force_join_toggle$"),
         CallbackQueryHandler(cb_set_force_join_channel, pattern=r"^set:force_join_channel$"),
@@ -2043,6 +2139,7 @@ def get_handlers():
         get_main_conv_handler(),
         CallbackQueryHandler(cb_adm_back, pattern=r"^adm:back$"),
         CallbackQueryHandler(cb_adm_plans, pattern=r"^adm:plans$"),
+        CallbackQueryHandler(cb_adm_plans_page, pattern=r"^adm:plans_page:(prev|next)$"),
         CallbackQueryHandler(cb_plan_detail_admin, pattern=r"^plan:detail:"),
         CallbackQueryHandler(cb_plan_toggle, pattern=r"^plan:toggle:"),
         CallbackQueryHandler(cb_plan_delete, pattern=r"^plan:delete:"),
@@ -2064,6 +2161,7 @@ def get_handlers():
         CallbackQueryHandler(cb_admin_detail, pattern=r"^admin:detail:"),
         CallbackQueryHandler(cb_admin_remove, pattern=r"^admin:remove:"),
         CallbackQueryHandler(cb_adm_settings, pattern=r"^adm:settings$"),
+        CallbackQueryHandler(cb_set_plan_pagination, pattern=r"^set:plan_pagination$"),
         CallbackQueryHandler(cb_set_card, pattern=r"^set:card$"),
         CallbackQueryHandler(cb_card_toggle, pattern=r"^set:card_toggle$"),
         CallbackQueryHandler(cb_set_crypto, pattern=r"^set:crypto$"),

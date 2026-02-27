@@ -13,6 +13,18 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
+async def _plans_page_size():
+    raw=await db.get_setting("plans_page_size_consumer", "8")
+    try:
+        val=int(raw)
+    except Exception:
+        return 8
+    if val<1:
+        return 1
+    if val>50:
+        return 50
+    return val
+
 async def _ensure_user(update):
     u = update.effective_user
     return await db.upsert_user(u.id, u.username or "", u.first_name or "")
@@ -37,17 +49,26 @@ async def cmd_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     if not await ensure_force_join(update, ctx):
         return
+    ctx.user_data["consumer_plans_page"]=0
     await _show_plans(update, ctx)
 
 async def _show_plans(update, ctx):
     plans = await db.list_plans(active_only=True)
     base = await get_base_currency()
+    per_page=await _plans_page_size()
+    total=len(plans)
+    max_page=max((total-1)//per_page, 0)
+    page=int(ctx.user_data.get("consumer_plans_page", 0))
+    page=max(0, min(page, max_page))
+    ctx.user_data["consumer_plans_page"]=page
     if not plans:
         target = update.message or update.callback_query.message
         await target.reply_text(t("no_plans"))
         return
+    start=page*per_page
+    show=plans[start:start+per_page]
     text = t("plans_header") + "\n"
-    for p in plans:
+    for p in show:
         price=str(p["price"])
         if base=="IRT":
             try:
@@ -60,7 +81,9 @@ async def _show_plans(update, ctx):
         days_text=t("adm_no_expiry") if int(p["days"])==0 else f"{p['days']}d"
         ip_text=t("adm_unlimited") if int(p["ip_limit"])==0 else str(p["ip_limit"])
         text += f"\n*{p['name']}* — {data_text} / {days_text} / {ip_text} — {price} {base}"
-    kb = plans_kb(plans, base)
+    if total>per_page:
+        text += f"\n\n{t('plans_page_info', page=page+1, pages=max_page+1)}"
+    kb = plans_kb(show, base, page, total, per_page)
     if update.message:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
     else:
@@ -190,6 +213,17 @@ async def cb_consumer_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if not await ensure_force_join(update, ctx):
         return
+    ctx.user_data["consumer_plans_page"]=0
+    await _show_plans(update, ctx)
+
+async def cb_consumer_plans_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return
+    direction=query.data.split(":", 2)[2]
+    page=int(ctx.user_data.get("consumer_plans_page", 0))
+    ctx.user_data["consumer_plans_page"]=page-1 if direction=="prev" else page+1
     await _show_plans(update, ctx)
 
 async def cmd_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -276,6 +310,7 @@ def get_handlers():
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_buttons),
         CallbackQueryHandler(cb_plan_detail, pattern=r"^plan:[A-Za-z0-9_-]{20}$"),
         CallbackQueryHandler(cb_consumer_plans, pattern=r"^consumer:plans$"),
+        CallbackQueryHandler(cb_consumer_plans_page, pattern=r"^consumer:plans_page:(prev|next)$"),
         CallbackQueryHandler(cb_trial_claim, pattern=r"^trial:claim$"),
         CallbackQueryHandler(cb_trial_back, pattern=r"^trial:back$"),
         CallbackQueryHandler(cb_regen_sub, pattern=r"^sub:regen:[^_]"),
