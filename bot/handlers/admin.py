@@ -27,7 +27,7 @@ from bot.states import (
     WIZARD_CRYPTO_MID, WIZARD_CRYPTO_KEY, WIZARD_CURRENCY,
     PLAN_CREATE_NAME, PLAN_CREATE_DATA, PLAN_CREATE_DAYS,
     PLAN_CREATE_IP, PLAN_CREATE_PRICE, PLAN_CREATE_NODES,
-    PLAN_EDIT_VALUE, PLAN_EDIT_NODES, PLAN_BULK_NODES,
+    PLAN_EDIT_VALUE, PLAN_EDIT_NODES, PLAN_BULK_NODES, PLAN_BULK_CREATE_NODES, PLAN_BULK_CREATE_MATRIX,
     ADMIN_ADD_ID, ADMIN_ADD_PERMS,
     ADMIN_MANUAL_SUB_COMMENT, ADMIN_MANUAL_SUB_DATA, ADMIN_MANUAL_SUB_DAYS,
     ADMIN_MANUAL_SUB_IP, ADMIN_MANUAL_SUB_NODES,
@@ -220,6 +220,7 @@ async def cb_adm_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         status = "✅" if p["is_active"] else "❌"
         rows.append([InlineKeyboardButton(f"{status} {p['name']} — {_fmt_plan_price_display(p['price'], base)} {base}", callback_data=f"plan:detail:{p['id']}")])
     rows.append([InlineKeyboardButton(t("adm_create_plan_btn"), callback_data="plan:create")])
+    rows.append([InlineKeyboardButton(t("adm_bulk_create_btn"), callback_data="plan:bulk_create")])
     rows.append([InlineKeyboardButton(t("adm_bulk_nodes_btn"), callback_data="plans:bulk_nodes")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     await query.edit_message_text(t("plans_title"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
@@ -348,6 +349,101 @@ async def plan_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     for k in ("plan_name", "plan_data", "plan_days", "plan_ip", "plan_price", "plan_nodes"):
         ctx.user_data.pop(k, None)
     await query.edit_message_text(t("plan_created"), reply_markup=back_kb("adm:plans"))
+    return ConversationHandler.END
+
+async def cb_plan_bulk_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    nodes=await gg.list_nodes()
+    if not nodes:
+        await query.edit_message_text(t("ghostgate_error"))
+        return ConversationHandler.END
+    ctx.user_data["bulk_create_nodes"]=[]
+    await query.edit_message_text(t("adm_bulk_create_nodes_prompt"), reply_markup=node_select_kb(nodes, [], "plan:bulk_create_nodes_done", "adm:plans"))
+    return PLAN_BULK_CREATE_NODES
+
+async def plan_bulk_create_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    node_id=int(query.data.split(":", 1)[1])
+    selected=ctx.user_data.get("bulk_create_nodes", [])
+    if node_id in selected:
+        selected.remove(node_id)
+    else:
+        selected.append(node_id)
+    ctx.user_data["bulk_create_nodes"]=selected
+    nodes=await gg.list_nodes()
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, selected, "plan:bulk_create_nodes_done", "adm:plans"))
+    return PLAN_BULK_CREATE_NODES
+
+async def plan_bulk_create_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_bulk_create_matrix_prompt"), reply_markup=cancel_kb(), parse_mode="Markdown")
+    return PLAN_BULK_CREATE_MATRIX
+
+def _parse_bulk_matrix(text):
+    data_expected=[10,20,30,40,50,100,200,300,500,1000]
+    rows={}
+    for raw in text.splitlines():
+        line=raw.strip()
+        if not line:
+            continue
+        if ":" not in line:
+            return None, "bad_data"
+        left,right=line.split(":", 1)
+        try:
+            data=int(left.strip().replace("GB", "").replace("gb", "").strip())
+        except Exception:
+            return None, "bad_data"
+        parts=[p.strip() for p in right.split(",")]
+        if len(parts)!=4:
+            return None, "bad_price"
+        prices=[]
+        for p in parts:
+            try:
+                v=Decimal(p.replace(",", ""))
+            except Exception:
+                return None, "bad_price"
+            if v<=0:
+                return None, "bad_price"
+            prices.append(float(v))
+        rows[data]=prices
+    if sorted(rows.keys())!=data_expected:
+        return None, "bad_data"
+    return rows, None
+
+async def plan_bulk_create_matrix_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    rows, err=_parse_bulk_matrix(update.message.text.strip())
+    if err=="bad_data":
+        await update.message.reply_text(t("adm_bulk_create_bad_data"))
+        return PLAN_BULK_CREATE_MATRIX
+    if err=="bad_price":
+        await update.message.reply_text(t("adm_bulk_create_bad_price"))
+        return PLAN_BULK_CREATE_MATRIX
+    node_ids=ctx.user_data.pop("bulk_create_nodes", [])
+    plans=await db.list_plans(active_only=False)
+    existing={}
+    for p in plans:
+        key=(int(float(p["data_gb"])), int(p["days"]), int(p["ip_limit"]))
+        existing[key]=p
+    created=0
+    updated=0
+    for data in [10,20,30,40,50,100,200,300,500,1000]:
+        prices=rows[data]
+        for ip in [1,2,3,4]:
+            price=prices[ip-1]
+            key=(data, 30, ip)
+            name=f"{data} GB • {ip} IP • 30D"
+            if key in existing:
+                await db.update_plan(existing[key]["id"], name=name, price=price, node_ids=node_ids)
+                updated+=1
+            else:
+                await db.create_plan(name=name, data_gb=float(data), days=30, ip_limit=ip, price=price, node_ids=node_ids)
+                created+=1
+    await update.message.reply_text(t("adm_bulk_create_done", created=created, updated=updated), reply_markup=back_kb("adm:plans"))
     return ConversationHandler.END
 
 async def cb_plan_edit_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1398,6 +1494,7 @@ async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     for k in ("plan_name", "plan_data", "plan_days", "plan_ip", "plan_price", "plan_nodes",
+              "bulk_create_nodes",
               "msub_comment", "msub_data", "msub_days", "msub_ip", "msub_nodes",
               "new_admin_id", "editing_plan_id", "editing_plan_field", "editing_plan_nodes_id", "editing_plan_nodes", "bulk_plan_nodes",
               "new_curr_code", "new_curr_name", "new_curr_decimals", "new_curr_methods", "editing_curr_code",
@@ -1421,6 +1518,8 @@ def get_main_conv_handler():
         PLAN_CREATE_IP: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_get_ip)],
         PLAN_CREATE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_get_price)],
         PLAN_CREATE_NODES: [CallbackQueryHandler(plan_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(plan_nodes_done, pattern=r"^plan:nodes_done$")],
+        PLAN_BULK_CREATE_NODES: [CallbackQueryHandler(plan_bulk_create_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(plan_bulk_create_nodes_done, pattern=r"^plan:bulk_create_nodes_done$")],
+        PLAN_BULK_CREATE_MATRIX: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_bulk_create_matrix_save)],
         PLAN_EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_edit_value)],
         PLAN_EDIT_NODES: [CallbackQueryHandler(plan_edit_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(plan_edit_nodes_done, pattern=r"^plan:edit_nodes_done$")],
         PLAN_BULK_NODES: [CallbackQueryHandler(plans_bulk_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(plans_bulk_nodes_done, pattern=r"^plans:bulk_nodes_done$")],
@@ -1457,6 +1556,7 @@ def get_main_conv_handler():
     entry_points = [
         CommandHandler("start", cmd_start_admin),
         CallbackQueryHandler(cb_plan_create, pattern=r"^plan:create$"),
+        CallbackQueryHandler(cb_plan_bulk_create, pattern=r"^plan:bulk_create$"),
         CallbackQueryHandler(cb_plan_edit_price, pattern=r"^plan:edit_price:"),
         CallbackQueryHandler(cb_plan_edit_name, pattern=r"^plan:edit_name:"),
         CallbackQueryHandler(cb_plan_edit_nodes, pattern=r"^plan:edit_nodes:"),
