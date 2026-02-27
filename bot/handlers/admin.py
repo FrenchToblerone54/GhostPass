@@ -34,7 +34,7 @@ from bot.states import (
     ADMIN_MANUAL_SUB_IP, ADMIN_MANUAL_SUB_NODES,
     SETTINGS_CARD_NUM, SETTINGS_CARD_NAME,
     SETTINGS_CRYPTO_MID, SETTINGS_CRYPTO_KEY,
-    SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL, SETTINGS_UPDATE_HTTP_PROXY, SETTINGS_UPDATE_HTTPS_PROXY,
+    SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL, SETTINGS_UPDATE_HTTP_PROXY, SETTINGS_UPDATE_HTTPS_PROXY, SETTINGS_FORCE_JOIN_CHANNEL,
     USER_SEARCH, SUB_SEARCH,
     ADMIN_REJECT_REASON,
     CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE,
@@ -1085,12 +1085,16 @@ async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = await db.get_user_by_id(order["user_id"])
     if not plan or not user:
         return
+    expire_after_first_use_seconds=None
+    if int(plan["days"])>0 and await db.get_setting("plan_start_after_use", "0")=="1":
+        expire_after_first_use_seconds=int(plan["days"])*86400
     result = await gg.create_subscription(
         comment=user.get("first_name") or str(user["telegram_id"]),
         data_gb=plan["data_gb"],
-        days=plan["days"],
+        days=3650 if expire_after_first_use_seconds else plan["days"],
         ip_limit=plan["ip_limit"],
-        node_ids=plan["node_ids"]
+        node_ids=plan["node_ids"],
+        expire_after_first_use_seconds=expire_after_first_use_seconds
     )
     if not result:
         await query.edit_message_text(t("ghostgate_error"))
@@ -1380,6 +1384,64 @@ async def settings_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     settings.SYNC_INTERVAL = val
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
+
+async def cb_set_force_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    enabled=await db.get_setting("force_join_enabled", "0")=="1"
+    channel=await db.get_setting("force_join_channel", "")
+    rows=[
+        [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:force_join_toggle")],
+        [InlineKeyboardButton(t("adm_force_join_set_channel"), callback_data="set:force_join_channel")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
+    ]
+    await query.edit_message_text(t("adm_force_join_title", status=t("adm_enabled") if enabled else t("adm_disabled"), channel=channel or "-"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+async def cb_force_join_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    enabled=await db.get_setting("force_join_enabled", "0")=="1"
+    await db.set_setting("force_join_enabled", "0" if enabled else "1")
+    await cb_set_force_join(update, ctx)
+
+async def cb_set_force_join_channel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_force_join_prompt"), reply_markup=cancel_kb(), parse_mode="Markdown")
+    return SETTINGS_FORCE_JOIN_CHANNEL
+
+async def settings_force_join_channel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val=update.message.text.strip()
+    if val=="-":
+        val=""
+    if val:
+        try:
+            me=await ctx.bot.get_me()
+            await ctx.bot.get_chat_member(val, me.id)
+        except Exception:
+            await update.message.reply_text(t("invalid_input"))
+            return SETTINGS_FORCE_JOIN_CHANNEL
+    await db.set_setting("force_join_channel", val)
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:force_join"))
+    return ConversationHandler.END
+
+async def cb_set_plan_start_after_use(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    enabled=await db.get_setting("plan_start_after_use", "0")=="1"
+    await db.set_setting("plan_start_after_use", "0" if enabled else "1")
+    status=t("adm_enabled") if not enabled else t("adm_disabled")
+    await query.answer(t("adm_plan_after_use_status", status=status), show_alert=True)
+    await cb_adm_settings(update, ctx)
+
+async def cb_set_trial_start_after_use(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    enabled=await db.get_setting("trial_start_after_use", "1")=="1"
+    await db.set_setting("trial_start_after_use", "0" if enabled else "1")
+    status=t("adm_enabled") if not enabled else t("adm_disabled")
+    await query.answer(t("adm_trial_after_use_status", status=status), show_alert=True)
+    await cb_adm_settings(update, ctx)
 
 async def cb_set_update_http_proxy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _is_admin(update.effective_user.id):
@@ -1671,8 +1733,9 @@ async def cb_set_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data_gb = await db.get_setting("trial_data_gb", "0.5")
     expire_h = int(await db.get_setting("trial_expire_seconds", "86400"))//3600
     node_ids = json.loads(await db.get_setting("trial_node_ids", "[]"))
+    start_after_use = await db.get_setting("trial_start_after_use", "1")=="1"
     await query.edit_message_text(
-        t("trial_settings", status=t("adm_enabled") if enabled else t("adm_disabled"), data_gb=data_gb, expire_h=expire_h, node_count=len(node_ids)),
+        t("trial_settings", status=t("adm_enabled") if enabled else t("adm_disabled"), data_gb=data_gb, expire_h=expire_h, node_count=len(node_ids))+f"\n{t('adm_trial_after_use_status', status=t('adm_enabled') if start_after_use else t('adm_disabled'))}",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:trial_toggle")],
             [InlineKeyboardButton(t("adm_trial_set_data"), callback_data="set:trial_data")],
@@ -1833,6 +1896,7 @@ def get_main_conv_handler():
         SETTINGS_CRYPTO_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_crypto_key)],
         SETTINGS_SUPPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_support)],
         SETTINGS_SYNC: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_sync)],
+        SETTINGS_FORCE_JOIN_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_force_join_channel)],
         SETTINGS_UPDATE_HTTP_PROXY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_update_http_proxy)],
         SETTINGS_UPDATE_HTTPS_PROXY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_update_https_proxy)],
         SETTINGS_USDT_TRC20: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_trc20)],
@@ -1871,6 +1935,11 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_crypto_key, pattern=r"^set:crypto_key$"),
         CallbackQueryHandler(cb_set_support, pattern=r"^set:support$"),
         CallbackQueryHandler(cb_set_sync, pattern=r"^set:sync$"),
+        CallbackQueryHandler(cb_set_force_join, pattern=r"^set:force_join$"),
+        CallbackQueryHandler(cb_force_join_toggle, pattern=r"^set:force_join_toggle$"),
+        CallbackQueryHandler(cb_set_force_join_channel, pattern=r"^set:force_join_channel$"),
+        CallbackQueryHandler(cb_set_plan_start_after_use, pattern=r"^set:plan_start_after_use$"),
+        CallbackQueryHandler(cb_set_trial_start_after_use, pattern=r"^set:trial_start_after_use$"),
         CallbackQueryHandler(cb_set_update_http_proxy, pattern=r"^set:update_http_proxy$"),
         CallbackQueryHandler(cb_set_update_https_proxy, pattern=r"^set:update_https_proxy$"),
         CallbackQueryHandler(cb_set_usdt_trc20, pattern=r"^set:usdt_trc20$"),

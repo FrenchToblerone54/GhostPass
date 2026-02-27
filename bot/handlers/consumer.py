@@ -8,6 +8,7 @@ from core.currency import get_base_currency, fmt_price_for_method, price_for_met
 from decimal import Decimal
 from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb
 from bot.strings import t
+from bot.guards import ensure_force_join
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -25,12 +26,16 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _check_banned(update):
         await update.message.reply_text(t("banned"))
         return
+    if not await ensure_force_join(update, ctx):
+        return
     show_trial = await db.get_setting("trial_enabled", "0")=="1" and not await db.has_trial_claim(uid)
     await update.message.reply_text(t("welcome"), reply_markup=main_consumer_kb(show_trial))
 
 async def cmd_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _ensure_user(update)
     if await _check_banned(update):
+        return
+    if not await ensure_force_join(update, ctx):
         return
     await _show_plans(update, ctx)
 
@@ -64,6 +69,8 @@ async def _show_plans(update, ctx):
 async def cmd_mystatus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = await _ensure_user(update)
     if await _check_banned(update):
+        return
+    if not await ensure_force_join(update, ctx):
         return
     orders = await db.get_user_paid_orders(uid)
     trial = await db.get_user_trial_claim(uid)
@@ -128,6 +135,8 @@ async def cb_regen_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.delete_message()
 
 async def cmd_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await ensure_force_join(update, ctx):
+        return
     support = await db.get_setting("support_username", "")
     if support:
         await update.message.reply_text(t("support_contact", support=support))
@@ -137,6 +146,8 @@ async def cmd_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return
     plan_id = query.data.split(":", 1)[1]
     plan = await db.get_plan(plan_id)
     if not plan:
@@ -177,11 +188,15 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_consumer_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return
     await _show_plans(update, ctx)
 
 async def cmd_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = await _ensure_user(update)
     if await _check_banned(update):
+        return
+    if not await ensure_force_join(update, ctx):
         return
     if await db.get_setting("trial_enabled", "0")!="1":
         await update.message.reply_text(t("trial_not_available"))
@@ -203,6 +218,8 @@ async def cmd_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_trial_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return
     uid = await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
     if await db.get_setting("trial_enabled", "0")!="1":
         await query.edit_message_text(t("trial_not_available"))
@@ -213,13 +230,14 @@ async def cb_trial_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data_gb = float(await db.get_setting("trial_data_gb", "0.5"))
     expire_s = int(await db.get_setting("trial_expire_seconds", "86400"))
     node_ids = json.loads(await db.get_setting("trial_node_ids", "[]"))
+    trial_start_after_use=await db.get_setting("trial_start_after_use", "1")
     result = await gg.create_subscription(
         comment=f"Trial-{query.from_user.id}",
         data_gb=data_gb,
-        days=3650,
+        days=3650 if trial_start_after_use=="1" else max(1, (expire_s+86399)//86400),
         ip_limit=1,
         node_ids=node_ids,
-        expire_after_first_use_seconds=expire_s
+        expire_after_first_use_seconds=expire_s if trial_start_after_use=="1" else None
     )
     if not result or not result.get("id"):
         await query.edit_message_text(t("service_unavailable"))

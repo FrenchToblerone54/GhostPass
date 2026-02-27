@@ -8,12 +8,15 @@ from core.currency import price_for_method, fmt
 from bot.strings import t
 from bot.keyboards import cancel_kb
 from bot.states import CARD_WAIT_RECEIPT
+from bot.guards import ensure_force_join
 
 logger = logging.getLogger(__name__)
 
 async def cb_buy_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return ConversationHandler.END
     plan_id = query.data.split(":", 2)[2]
     plan = await db.get_plan(plan_id)
     if not plan:

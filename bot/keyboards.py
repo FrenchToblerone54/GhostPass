@@ -48,7 +48,7 @@ def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_
     return InlineKeyboardMarkup(rows)
 
 def plans_kb(plans, base_currency="IRT"):
-    rows = [[InlineKeyboardButton(f"{p['name']} — {_fmt_plan_price(p['price'], base_currency)} {base_currency}", callback_data=f"plan:{p['id']}")] for p in plans]
+    rows = [[InlineKeyboardButton(f"{t('btn_buy_plan', name=p['name'])} — {_fmt_plan_price(p['price'], base_currency)} {base_currency}", callback_data=f"plan:{p['id']}")] for p in plans]
     return InlineKeyboardMarkup(rows)
 
 def settings_kb():
@@ -62,6 +62,9 @@ def settings_kb():
         [InlineKeyboardButton(t("btn_set_usdt"), callback_data="set:usdt")],
         [InlineKeyboardButton(t("btn_set_trial"), callback_data="set:trial")],
         [InlineKeyboardButton(t("btn_set_sync"), callback_data="set:sync")],
+        [InlineKeyboardButton(t("btn_set_force_join"), callback_data="set:force_join")],
+        [InlineKeyboardButton(t("btn_set_plan_start_after_use"), callback_data="set:plan_start_after_use")],
+        [InlineKeyboardButton(t("btn_set_trial_start_after_use"), callback_data="set:trial_start_after_use")],
         [InlineKeyboardButton(t("btn_set_update_http_proxy"), callback_data="set:update_http_proxy"), InlineKeyboardButton(t("btn_set_update_https_proxy"), callback_data="set:update_https_proxy")],
         [InlineKeyboardButton(t("btn_back"), callback_data="adm:back")],
     ])

@@ -8,12 +8,15 @@ from core.currency import price_for_method, fmt
 from bot.strings import t
 from bot.keyboards import skip_kb, cancel_kb
 from bot.states import REQUEST_REASON
+from bot.guards import ensure_force_join
 
 logger = logging.getLogger(__name__)
 
 async def cb_buy_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return ConversationHandler.END
     plan_id = query.data.split(":", 2)[2]
     plan = await db.get_plan(plan_id)
     if not plan:
@@ -83,12 +86,16 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = await db.get_user_by_id(order["user_id"])
     if not plan or not user:
         return
+    expire_after_first_use_seconds=None
+    if int(plan["days"])>0 and await db.get_setting("plan_start_after_use", "0")=="1":
+        expire_after_first_use_seconds=int(plan["days"])*86400
     result = await gg.create_subscription(
         comment=user.get("first_name") or str(user["telegram_id"]),
         data_gb=plan["data_gb"],
-        days=plan["days"],
+        days=3650 if expire_after_first_use_seconds else plan["days"],
         ip_limit=plan["ip_limit"],
-        node_ids=plan["node_ids"]
+        node_ids=plan["node_ids"],
+        expire_after_first_use_seconds=expire_after_first_use_seconds
     )
     if not result:
         await query.edit_message_text(t("ghostgate_error"))
