@@ -736,7 +736,7 @@ async def cb_order_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         order_id=order_id,
         user=uname,
         plan=plan["name"] if plan else "?",
-        amount=f"{order['amount']} {order['currency']}",
+        amount=f"{cfmt(Decimal(str(order['amount'])), 0, order['currency'])} {order['currency']}",
         method=order["payment_method"],
         status=order["status"],
         created=order["created_at"][:16]

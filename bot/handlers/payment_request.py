@@ -54,7 +54,7 @@ async def _notify_admins(order_id, reason, update, ctx):
     caption = t(
         "request_caption",
         first_name=u.first_name or "",
-        username=f"@{u.username}" if u.username else str(u.id),
+        username=f"@{u.username.lstrip('@')}" if u.username else str(u.id),
         telegram_id=u.id,
         plan_name=plan["name"] if plan else order["plan_id"],
         reason=reason or t("request_no_reason")

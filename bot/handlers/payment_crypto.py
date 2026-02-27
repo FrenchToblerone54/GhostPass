@@ -55,7 +55,7 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("service_unavailable"))
         return
     amount, code, decimals = await price_for_method(plan["price"], "crypto")
-    price_str = f"{fmt(amount, decimals)} {code}"
+    price_str = f"{fmt(amount, decimals, code)} {code}"
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
     order_id = await db.create_order(uid, plan_id, "crypto", float(amount), code)

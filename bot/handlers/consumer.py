@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQ
 import core.db as db
 import core.ghostgate as gg
 from core.currency import get_base_currency, fmt_price_for_method, price_for_method, fmt
+from decimal import Decimal
 from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb
 from bot.strings import t
 from config import settings
@@ -152,7 +153,7 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         prices += f"\n{t('plan_price_line_request', price=await fmt_price_for_method(plan['price'], 'request'))}"
     if not prices:
         base = await get_base_currency()
-        prices = "\n" + t("plan_price_fallback", price=f"{plan['price']} {base}")
+        prices = "\n" + t("plan_price_fallback", price=f"{fmt(Decimal(str(plan['price'])), 0, base)} {base}")
     text += prices
     if not card_enabled and not crypto_enabled and not requests_enabled:
         if support:

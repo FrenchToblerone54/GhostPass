@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 import core.db as db
@@ -21,7 +22,7 @@ async def cb_buy_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     card_number = await db.get_setting("card_number", "")
     card_holder = await db.get_setting("card_holder", "")
     amount, code, decimals = await price_for_method(plan["price"], "card")
-    price_str = f"{fmt(amount, decimals)} {code}"
+    price_str = f"{fmt(amount, decimals, code)} {code}"
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
     order_id = await db.create_order(uid, plan_id, "card", float(amount), code)
@@ -45,11 +46,13 @@ async def handle_receipt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(t("receipt_received"))
     plan = await db.get_plan(order["plan_id"])
     u = update.effective_user
-    amount_str = f"{order['amount']} {order['currency']}"
+    amount_decimal=Decimal(str(order["amount"]))
+    decimals=0 if order["currency"]=="IRT" else 2
+    amount_str = f"{fmt(amount_decimal, decimals, order['currency'])} {order['currency']}"
     caption = t(
         "receipt_caption",
         first_name=u.first_name or "",
-        username=f"@{u.username}" if u.username else str(u.id),
+        username=f"@{u.username.lstrip('@')}" if u.username else str(u.id),
         telegram_id=u.id,
         plan_name=plan["name"] if plan else order["plan_id"],
         amount=amount_str
