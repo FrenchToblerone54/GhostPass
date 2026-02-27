@@ -42,7 +42,10 @@ if __name__=="__main__":
             sys.exit(0)
         if cmd=="update":
             from core.updater import Updater
-            asyncio.run(Updater().manual_update())
+            from config import settings
+            http_proxy=settings.AUTO_UPDATE_HTTP_PROXY or ""
+            https_proxy=settings.AUTO_UPDATE_HTTPS_PROXY or ""
+            asyncio.run(Updater(http_proxy=http_proxy, https_proxy=https_proxy).manual_update())
             sys.exit(0)
     from config import settings
     logging.basicConfig(

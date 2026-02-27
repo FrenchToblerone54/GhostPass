@@ -136,6 +136,8 @@ sudo journalctl -u ghostpass -f
 | `AUTO_UPDATE` | install.sh | `true` or `false` — auto-update binary on new releases |
 | `CHECK_ON_STARTUP` | install.sh | `true` or `false` — check for updates immediately on bot start (requires `AUTO_UPDATE=true`) |
 | `UPDATE_CHECK_INTERVAL` | install.sh | How often to check for updates in seconds |
+| `AUTO_UPDATE_HTTP_PROXY` | manual `.env` | Optional HTTP proxy for updater only |
+| `AUTO_UPDATE_HTTPS_PROXY` | manual `.env` | Optional HTTPS proxy for updater only |
 | `DB_PATH` | install.sh | SQLite database path |
 | `LOG_FILE` | install.sh | Log file path |
 

@@ -34,7 +34,7 @@ from bot.states import (
     ADMIN_MANUAL_SUB_IP, ADMIN_MANUAL_SUB_NODES,
     SETTINGS_CARD_NUM, SETTINGS_CARD_NAME,
     SETTINGS_CRYPTO_MID, SETTINGS_CRYPTO_KEY,
-    SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL,
+    SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL, SETTINGS_UPDATE_HTTP_PROXY, SETTINGS_UPDATE_HTTPS_PROXY,
     USER_SEARCH, SUB_SEARCH,
     ADMIN_REJECT_REASON,
     CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE,
@@ -211,8 +211,9 @@ async def cb_adm_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _is_admin(query.from_user.id):
         return
     await query.edit_message_text(t("adm_update_checking"), reply_markup=back_kb("adm:back"))
-    proxy=settings.BOT_PROXY or ""
-    updater=Updater(check_interval=settings.UPDATE_CHECK_INTERVAL, check_on_startup=settings.CHECK_ON_STARTUP, http_proxy=proxy, https_proxy=proxy)
+    http_proxy=settings.AUTO_UPDATE_HTTP_PROXY or ""
+    https_proxy=settings.AUTO_UPDATE_HTTPS_PROXY or ""
+    updater=Updater(check_interval=settings.UPDATE_CHECK_INTERVAL, check_on_startup=settings.CHECK_ON_STARTUP, http_proxy=http_proxy, https_proxy=https_proxy)
     new_version=await updater.check_for_update()
     if not new_version:
         await query.edit_message_text(t("adm_update_none"), reply_markup=back_kb("adm:back"))
@@ -1380,6 +1381,44 @@ async def settings_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
 
+async def cb_set_update_http_proxy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    current = settings.AUTO_UPDATE_HTTP_PROXY or ""
+    await query.edit_message_text(t("adm_update_http_proxy_prompt", current=current or "-"), reply_markup=cancel_kb(), parse_mode="Markdown")
+    return SETTINGS_UPDATE_HTTP_PROXY
+
+async def settings_update_http_proxy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    if val=="-":
+        val=""
+    from dotenv import set_key as dotenv_set
+    dotenv_set("/opt/ghostpass/.env", "AUTO_UPDATE_HTTP_PROXY", val)
+    settings.AUTO_UPDATE_HTTP_PROXY = val or None
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
+    return ConversationHandler.END
+
+async def cb_set_update_https_proxy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    current = settings.AUTO_UPDATE_HTTPS_PROXY or ""
+    await query.edit_message_text(t("adm_update_https_proxy_prompt", current=current or "-"), reply_markup=cancel_kb(), parse_mode="Markdown")
+    return SETTINGS_UPDATE_HTTPS_PROXY
+
+async def settings_update_https_proxy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    if val=="-":
+        val=""
+    from dotenv import set_key as dotenv_set
+    dotenv_set("/opt/ghostpass/.env", "AUTO_UPDATE_HTTPS_PROXY", val)
+    settings.AUTO_UPDATE_HTTPS_PROXY = val or None
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
+    return ConversationHandler.END
+
 async def cb_set_usdt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1794,6 +1833,8 @@ def get_main_conv_handler():
         SETTINGS_CRYPTO_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_crypto_key)],
         SETTINGS_SUPPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_support)],
         SETTINGS_SYNC: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_sync)],
+        SETTINGS_UPDATE_HTTP_PROXY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_update_http_proxy)],
+        SETTINGS_UPDATE_HTTPS_PROXY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_update_https_proxy)],
         SETTINGS_USDT_TRC20: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_trc20)],
         SETTINGS_USDT_BSC: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_bsc)],
         SETTINGS_USDT_POLYGON: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_polygon)],
@@ -1830,6 +1871,8 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_crypto_key, pattern=r"^set:crypto_key$"),
         CallbackQueryHandler(cb_set_support, pattern=r"^set:support$"),
         CallbackQueryHandler(cb_set_sync, pattern=r"^set:sync$"),
+        CallbackQueryHandler(cb_set_update_http_proxy, pattern=r"^set:update_http_proxy$"),
+        CallbackQueryHandler(cb_set_update_https_proxy, pattern=r"^set:update_https_proxy$"),
         CallbackQueryHandler(cb_set_usdt_trc20, pattern=r"^set:usdt_trc20$"),
         CallbackQueryHandler(cb_set_usdt_bsc, pattern=r"^set:usdt_bsc$"),
         CallbackQueryHandler(cb_set_usdt_polygon, pattern=r"^set:usdt_polygon$"),

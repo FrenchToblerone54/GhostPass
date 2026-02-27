@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     AUTO_UPDATE: bool = True
     CHECK_ON_STARTUP: bool = True
     UPDATE_CHECK_INTERVAL: int = 300
+    AUTO_UPDATE_HTTP_PROXY: Optional[str] = None
+    AUTO_UPDATE_HTTPS_PROXY: Optional[str] = None
     DB_PATH: str = "/opt/ghostpass/ghostpass.db"
     LOG_FILE: str = "/var/log/ghostpass.log"
 

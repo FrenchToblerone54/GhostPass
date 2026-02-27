@@ -136,6 +136,8 @@ sudo journalctl -u ghostpass -f
 | `AUTO_UPDATE` | install.sh | `true` یا `false` — به‌روزرسانی خودکار باینری هنگام انتشار نسخه جدید |
 | `CHECK_ON_STARTUP` | install.sh | `true` یا `false` — بررسی به‌روزرسانی بلافاصله هنگام راه‌اندازی ربات (نیازمند `AUTO_UPDATE=true`) |
 | `UPDATE_CHECK_INTERVAL` | install.sh | فاصله بررسی به‌روزرسانی بر حسب ثانیه |
+| `AUTO_UPDATE_HTTP_PROXY` | manual `.env` | پروکسی HTTP اختیاری فقط برای آپدیتر |
+| `AUTO_UPDATE_HTTPS_PROXY` | manual `.env` | پروکسی HTTPS اختیاری فقط برای آپدیتر |
 | `DB_PATH` | install.sh | مسیر پایگاه داده SQLite |
 | `LOG_FILE` | install.sh | مسیر فایل لاگ |
 

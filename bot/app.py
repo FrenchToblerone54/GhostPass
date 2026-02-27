@@ -21,8 +21,9 @@ async def _post_init(app: Application):
     asyncio.create_task(run_sync_worker(app.bot))
     asyncio.create_task(crypto_h.run_webhook_server(app.bot))
     if settings.AUTO_UPDATE:
-        proxy=settings.BOT_PROXY or ""
-        updater=Updater(check_interval=settings.UPDATE_CHECK_INTERVAL, check_on_startup=settings.CHECK_ON_STARTUP, http_proxy=proxy, https_proxy=proxy)
+        http_proxy=settings.AUTO_UPDATE_HTTP_PROXY or ""
+        https_proxy=settings.AUTO_UPDATE_HTTPS_PROXY or ""
+        updater=Updater(check_interval=settings.UPDATE_CHECK_INTERVAL, check_on_startup=settings.CHECK_ON_STARTUP, http_proxy=http_proxy, https_proxy=https_proxy)
         shutdown_event=asyncio.Event()
         app.bot_data["shutdown_event"]=shutdown_event
         asyncio.create_task(updater.update_loop(shutdown_event))

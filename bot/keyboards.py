@@ -62,6 +62,7 @@ def settings_kb():
         [InlineKeyboardButton(t("btn_set_usdt"), callback_data="set:usdt")],
         [InlineKeyboardButton(t("btn_set_trial"), callback_data="set:trial")],
         [InlineKeyboardButton(t("btn_set_sync"), callback_data="set:sync")],
+        [InlineKeyboardButton(t("btn_set_update_http_proxy"), callback_data="set:update_http_proxy"), InlineKeyboardButton(t("btn_set_update_https_proxy"), callback_data="set:update_https_proxy")],
         [InlineKeyboardButton(t("btn_back"), callback_data="adm:back")],
     ])
 
