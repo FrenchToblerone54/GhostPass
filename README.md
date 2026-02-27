@@ -132,6 +132,10 @@ sudo journalctl -u ghostpass -f
 | `BOT_PROXY` | install.sh | Optional proxy URL for Telegram API |
 | `LANGUAGE` | install.sh | `en` or `fa` |
 | `GHOSTGATE_URL` | first-run wizard | Full GhostGate panel URL with secret path |
+| `GHOSTPAYMENTS_URL` | manual `.env` | GhostPayments base URL with payment path (e.g. `https://pay.example.com/SECRET_PATH`) |
+| `GHOSTPAYMENTS_API_KEY` | manual `.env` | GhostPayments API key (`X-GhostPay-Key`) |
+| `GHOSTPAYMENTS_CHAIN` | manual `.env` | `BSC` or `POLYGON` |
+| `GHOSTPAYMENTS_TOKEN` | manual `.env` | `USDT`, `BNB`, or `POL` |
 | `SYNC_INTERVAL` | install.sh | Background sync interval in seconds |
 | `AUTO_UPDATE` | install.sh | `true` or `false` — auto-update binary on new releases |
 | `CHECK_ON_STARTUP` | install.sh | `true` or `false` — check for updates immediately on bot start (requires `AUTO_UPDATE=true`) |

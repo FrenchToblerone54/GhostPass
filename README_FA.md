@@ -132,6 +132,10 @@ sudo journalctl -u ghostpass -f
 | `BOT_PROXY` | install.sh | آدرس پروکسی اختیاری برای API تلگرام |
 | `LANGUAGE` | install.sh | `en` یا `fa` |
 | `GHOSTGATE_URL` | ویزارد راه‌اندازی | آدرس کامل پنل GhostGate با مسیر مخفی |
+| `GHOSTPAYMENTS_URL` | manual `.env` | آدرس پایه GhostPayments همراه مسیر پرداخت (مثال: `https://pay.example.com/SECRET_PATH`) |
+| `GHOSTPAYMENTS_API_KEY` | manual `.env` | کلید API مربوط به `X-GhostPay-Key` |
+| `GHOSTPAYMENTS_CHAIN` | manual `.env` | مقدار `BSC` یا `POLYGON` |
+| `GHOSTPAYMENTS_TOKEN` | manual `.env` | مقدار `USDT`، `BNB` یا `POL` |
 | `SYNC_INTERVAL` | install.sh | فاصله همگام‌سازی پس‌زمینه بر حسب ثانیه |
 | `AUTO_UPDATE` | install.sh | `true` یا `false` — به‌روزرسانی خودکار باینری هنگام انتشار نسخه جدید |
 | `CHECK_ON_STARTUP` | install.sh | `true` یا `false` — بررسی به‌روزرسانی بلافاصله هنگام راه‌اندازی ربات (نیازمند `AUTO_UPDATE=true`) |

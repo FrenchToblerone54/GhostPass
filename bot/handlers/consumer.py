@@ -154,7 +154,7 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("order_not_found"))
         return
     card_enabled = await db.get_setting("card_enabled", "0")=="1"
-    crypto_enabled = await db.get_setting("cryptomus_enabled", "0")=="1"
+    crypto_enabled = (await db.get_setting("cryptomus_enabled", "0")=="1") or (await db.get_setting("ghostpayments_enabled", "0")=="1")
     requests_enabled = await db.get_setting("requests_enabled", "0")=="1"
     manual_enabled = await db.get_setting("manual_enabled", "1")=="1"
     support = await db.get_setting("support_username", "")

@@ -34,7 +34,7 @@ from bot.states import (
     ADMIN_MANUAL_SUB_IP, ADMIN_MANUAL_SUB_NODES,
     SETTINGS_CARD_NUM, SETTINGS_CARD_NAME,
     SETTINGS_CRYPTO_MID, SETTINGS_CRYPTO_KEY,
-    SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL, SETTINGS_UPDATE_HTTP_PROXY, SETTINGS_UPDATE_HTTPS_PROXY, SETTINGS_FORCE_JOIN_CHANNEL,
+    SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL, SETTINGS_UPDATE_HTTP_PROXY, SETTINGS_UPDATE_HTTPS_PROXY, SETTINGS_FORCE_JOIN_CHANNEL, SETTINGS_GHOSTPAY_URL, SETTINGS_GHOSTPAY_KEY,
     USER_SEARCH, SUB_SEARCH,
     ADMIN_REJECT_REASON,
     CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE,
@@ -1293,19 +1293,34 @@ async def cb_set_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     mid = await db.get_setting("cryptomus_merchant_id", "(not set)")
     enabled = await db.get_setting("cryptomus_enabled", "0")=="1"
+    gp_enabled = await db.get_setting("ghostpayments_enabled", "0")=="1"
+    gp_url = await db.get_setting("ghostpayments_url", settings.GHOSTPAYMENTS_URL or "(not set)")
+    gp_chain = (await db.get_setting("ghostpayments_chain", settings.GHOSTPAYMENTS_CHAIN or "BSC")).upper()
+    gp_token = (await db.get_setting("ghostpayments_token", settings.GHOSTPAYMENTS_TOKEN or "USDT")).upper()
     rows = [
         [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:crypto_toggle")],
+        [InlineKeyboardButton(t("adm_toggle_btn", status=f"GhostPayments {t('adm_enabled') if gp_enabled else t('adm_disabled')}"), callback_data="set:gp_toggle")],
         [InlineKeyboardButton(t("btn_edit_mid"), callback_data="set:crypto_mid")],
         [InlineKeyboardButton(t("btn_edit_api_key"), callback_data="set:crypto_key")],
+        [InlineKeyboardButton(t("btn_edit_gp_url"), callback_data="set:gp_url")],
+        [InlineKeyboardButton(t("btn_edit_gp_key"), callback_data="set:gp_key")],
+        [InlineKeyboardButton(f"Chain: {gp_chain}", callback_data="set:gp_chain"), InlineKeyboardButton(f"Token: {gp_token}", callback_data="set:gp_token")],
         [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
     ]
-    await query.edit_message_text(f"🪙 *Cryptomus*\n\nMerchant ID: `{mid}`", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    await query.edit_message_text(f"🪙 *Crypto Providers*\n\nCryptomus MID: `{mid}`\nGhostPayments URL: `{gp_url}`", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_crypto_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     enabled = await db.get_setting("cryptomus_enabled", "0")=="1"
     await db.set_setting("cryptomus_enabled", "0" if enabled else "1")
+    await cb_set_crypto(update, ctx)
+
+async def cb_gp_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    enabled = await db.get_setting("ghostpayments_enabled", "0")=="1"
+    await db.set_setting("ghostpayments_enabled", "0" if enabled else "1")
     await cb_set_crypto(update, ctx)
 
 async def cb_set_crypto_mid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1333,6 +1348,71 @@ async def settings_crypto_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await db.set_setting("cryptomus_api_key", update.message.text.strip())
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:crypto"))
     return ConversationHandler.END
+
+async def cb_set_gp_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_enter_gp_url"), reply_markup=cancel_kb())
+    return SETTINGS_GHOSTPAY_URL
+
+async def settings_gp_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await db.set_setting("ghostpayments_url", update.message.text.strip().rstrip("/"))
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:crypto"))
+    return ConversationHandler.END
+
+async def cb_set_gp_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_enter_gp_key"), reply_markup=cancel_kb())
+    return SETTINGS_GHOSTPAY_KEY
+
+async def settings_gp_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    await db.set_setting("ghostpayments_api_key", update.message.text.strip())
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:crypto"))
+    return ConversationHandler.END
+
+async def cb_set_gp_chain(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    rows = [
+        [InlineKeyboardButton("BSC", callback_data="set:gp_chain_val:BSC"), InlineKeyboardButton("POLYGON", callback_data="set:gp_chain_val:POLYGON")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="set:crypto")],
+    ]
+    await query.edit_message_text("Select GhostPayments chain:", reply_markup=InlineKeyboardMarkup(rows))
+
+async def cb_set_gp_chain_val(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chain = query.data.split(":", 3)[3].upper()
+    await db.set_setting("ghostpayments_chain", chain)
+    token = (await db.get_setting("ghostpayments_token", settings.GHOSTPAYMENTS_TOKEN or "USDT")).upper()
+    if chain=="BSC" and token=="POL":
+        await db.set_setting("ghostpayments_token", "USDT")
+    if chain=="POLYGON" and token=="BNB":
+        await db.set_setting("ghostpayments_token", "USDT")
+    await cb_set_crypto(update, ctx)
+
+async def cb_set_gp_token(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    chain = (await db.get_setting("ghostpayments_chain", settings.GHOSTPAYMENTS_CHAIN or "BSC")).upper()
+    if chain=="BSC":
+        rows = [[InlineKeyboardButton("USDT", callback_data="set:gp_token_val:USDT"), InlineKeyboardButton("BNB", callback_data="set:gp_token_val:BNB")]]
+    else:
+        rows = [[InlineKeyboardButton("USDT", callback_data="set:gp_token_val:USDT"), InlineKeyboardButton("POL", callback_data="set:gp_token_val:POL")]]
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="set:crypto")])
+    await query.edit_message_text("Select GhostPayments token:", reply_markup=InlineKeyboardMarkup(rows))
+
+async def cb_set_gp_token_val(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    token = query.data.split(":", 3)[3].upper()
+    await db.set_setting("ghostpayments_token", token)
+    await cb_set_crypto(update, ctx)
 
 async def cb_set_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1894,6 +1974,8 @@ def get_main_conv_handler():
         SETTINGS_CARD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_card_name)],
         SETTINGS_CRYPTO_MID: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_crypto_mid)],
         SETTINGS_CRYPTO_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_crypto_key)],
+        SETTINGS_GHOSTPAY_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_gp_url)],
+        SETTINGS_GHOSTPAY_KEY: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_gp_key)],
         SETTINGS_SUPPORT: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_support)],
         SETTINGS_SYNC: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_sync)],
         SETTINGS_FORCE_JOIN_CHANNEL: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_force_join_channel)],
@@ -1933,6 +2015,8 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_card_name, pattern=r"^set:card_name$"),
         CallbackQueryHandler(cb_set_crypto_mid, pattern=r"^set:crypto_mid$"),
         CallbackQueryHandler(cb_set_crypto_key, pattern=r"^set:crypto_key$"),
+        CallbackQueryHandler(cb_set_gp_url, pattern=r"^set:gp_url$"),
+        CallbackQueryHandler(cb_set_gp_key, pattern=r"^set:gp_key$"),
         CallbackQueryHandler(cb_set_support, pattern=r"^set:support$"),
         CallbackQueryHandler(cb_set_sync, pattern=r"^set:sync$"),
         CallbackQueryHandler(cb_set_force_join, pattern=r"^set:force_join$"),
@@ -1984,6 +2068,11 @@ def get_handlers():
         CallbackQueryHandler(cb_card_toggle, pattern=r"^set:card_toggle$"),
         CallbackQueryHandler(cb_set_crypto, pattern=r"^set:crypto$"),
         CallbackQueryHandler(cb_crypto_toggle, pattern=r"^set:crypto_toggle$"),
+        CallbackQueryHandler(cb_gp_toggle, pattern=r"^set:gp_toggle$"),
+        CallbackQueryHandler(cb_set_gp_chain, pattern=r"^set:gp_chain$"),
+        CallbackQueryHandler(cb_set_gp_chain_val, pattern=r"^set:gp_chain_val:"),
+        CallbackQueryHandler(cb_set_gp_token, pattern=r"^set:gp_token$"),
+        CallbackQueryHandler(cb_set_gp_token_val, pattern=r"^set:gp_token_val:"),
         CallbackQueryHandler(cb_set_requests, pattern=r"^set:requests$"),
         CallbackQueryHandler(cb_req_toggle, pattern=r"^set:req_toggle$"),
         CallbackQueryHandler(cb_set_usdt, pattern=r"^set:usdt$"),

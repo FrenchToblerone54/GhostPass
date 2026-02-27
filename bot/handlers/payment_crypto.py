@@ -60,6 +60,22 @@ async def check_invoice_btcpay(invoice_id, base_url, store_id, api_key):
         r.raise_for_status()
         return r.json()
 
+async def create_invoice_ghostpayments(base_url, api_key, chain, token, amount_native, order_id):
+    import httpx
+    payload={"chain": chain, "token": token, "amount_native": str(amount_native), "metadata": {"order_id": order_id}}
+    headers={"X-GhostPay-Key": api_key, "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=20) as c:
+        r=await c.post(f"{base_url.rstrip('/')}/api/invoice", json=payload, headers=headers)
+        r.raise_for_status()
+        return r.json()
+
+async def check_invoice_ghostpayments(base_url, invoice_id):
+    import httpx
+    async with httpx.AsyncClient(timeout=20) as c:
+        r=await c.get(f"{base_url.rstrip('/')}/api/invoice/{invoice_id}")
+        r.raise_for_status()
+        return r.json()
+
 async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -75,17 +91,33 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     btcpay_url = settings.BTCPAY_URL or await db.get_setting("btcpay_url", "")
     btcpay_store = settings.BTCPAY_STORE_ID or await db.get_setting("btcpay_store_id", "")
     btcpay_key = settings.BTCPAY_API_KEY or await db.get_setting("btcpay_api_key", "")
+    gp_url = settings.GHOSTPAYMENTS_URL or await db.get_setting("ghostpayments_url", "")
+    gp_key = settings.GHOSTPAYMENTS_API_KEY or await db.get_setting("ghostpayments_api_key", "")
+    gp_chain = (await db.get_setting("ghostpayments_chain", settings.GHOSTPAYMENTS_CHAIN or "BSC")).upper()
+    gp_token = (await db.get_setting("ghostpayments_token", settings.GHOSTPAYMENTS_TOKEN or "USDT")).upper()
+    gp_enabled = await db.get_setting("ghostpayments_enabled", "0")=="1"
+    use_ghostpayments=bool(gp_enabled and gp_url and gp_key)
     use_btcpay=bool(btcpay_url and btcpay_store and btcpay_key)
-    if not use_btcpay and (not merchant_id or not api_key):
+    if not use_ghostpayments and not use_btcpay and (not merchant_id or not api_key):
         await query.edit_message_text(t("service_unavailable"))
         return
     amount, code, decimals = await price_for_method(plan["price"], "crypto")
+    if use_ghostpayments and code.upper()!=gp_token:
+        if use_btcpay or (merchant_id and api_key):
+            use_ghostpayments=False
+        else:
+            await query.edit_message_text(t("ghostpayments_currency_mismatch", code=code, token=gp_token), parse_mode="Markdown")
+            return
     price_str = f"{fmt(amount, decimals, code)} {code}"
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
     order_id = await db.create_order(uid, plan_id, "crypto", float(amount), code)
     try:
-        if use_btcpay:
+        if use_ghostpayments:
+            inv=await create_invoice_ghostpayments(gp_url, gp_key, gp_chain, gp_token, fmt(amount, decimals, code), order_id)
+            invoice_id=inv.get("invoice_id") or inv.get("id")
+            pay_url=inv.get("payment_url")
+        elif use_btcpay:
             inv=await create_invoice_btcpay(order_id, fmt(amount, decimals, code), code, btcpay_url, btcpay_store, btcpay_key)
             invoice_id=inv.get("id")
             pay_url=inv.get("checkoutLink")
@@ -105,17 +137,24 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = t("crypto_invoice_created", amount=price_str)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Open payment page", url=pay_url)]])
     await query.edit_message_text(text, reply_markup=kb)
-    provider="btcpay" if use_btcpay else "cryptomus"
-    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key))
+    provider="ghostpayments" if use_ghostpayments else ("btcpay" if use_btcpay else "cryptomus")
+    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key, gp_url))
 
-async def _poll_invoice(invoice_id, order_id, telegram_id, merchant_id, api_key, bot, provider="cryptomus", btcpay_url="", btcpay_store="", btcpay_key=""):
+async def _poll_invoice(invoice_id, order_id, telegram_id, merchant_id, api_key, bot, provider="cryptomus", btcpay_url="", btcpay_store="", btcpay_key="", gp_url=""):
     for _ in range(120):
         await asyncio.sleep(30)
         try:
             order = await db.get_order(order_id)
             if not order or order["status"]!="pending":
                 return
-            if provider=="btcpay":
+            if provider=="ghostpayments":
+                result=await check_invoice_ghostpayments(gp_url, invoice_id)
+                status=(result.get("status") or "").lower()
+                paid=status=="completed"
+                if status in ("expired", "failed"):
+                    await db.update_order(order_id, status="cancelled")
+                    return
+            elif provider=="btcpay":
                 result=await check_invoice_btcpay(invoice_id, btcpay_url, btcpay_store, btcpay_key)
                 status=(result.get("status") or "").lower()
                 paid=status in ("processing", "settled", "complete", "completed")
