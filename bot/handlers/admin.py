@@ -189,7 +189,7 @@ async def cb_plan_detail_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"📦 *{plan['name']}*\n"
         f"💾 {plan['data_gb']} GB / 📅 {plan['days']}d / 📱 {plan['ip_limit']} IPs\n"
         f"💰 {plan['price']} {base}\n"
-        f"🔗 Nodes: {len(plan['node_ids'])}\n"
+        f"🔗 Nodes: {len(plan['node_ids'])}\n" +
         t("adm_plan_status", status=t("adm_active") if plan['is_active'] else t("adm_inactive"))
     )
     await query.edit_message_text(text, reply_markup=plan_actions_kb(plan_id, plan["is_active"]), parse_mode="Markdown")
