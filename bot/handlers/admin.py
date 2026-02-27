@@ -14,7 +14,7 @@ import core.ghostgate as gg
 from core.updater import Updater, VERSION
 from core.currency import (
     get_currencies, save_currencies, get_base_currency, set_base_currency,
-    convert, fmt as cfmt
+    convert, fmt as cfmt, get_gp_pairs, save_gp_pairs, ALL_GP_PAIRS
 )
 from bot.keyboards import (
     main_admin_kb, settings_kb, back_kb, plan_actions_kb,
@@ -39,7 +39,8 @@ from bot.states import (
     ADMIN_REJECT_REASON,
     CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE,
     SETTINGS_TRIAL_DATA, SETTINGS_TRIAL_EXPIRE, SETTINGS_TRIAL_NODES,
-    SETTINGS_USDT_TRC20, SETTINGS_USDT_BSC, SETTINGS_USDT_POLYGON
+    SETTINGS_USDT_TRC20, SETTINGS_USDT_BSC, SETTINGS_USDT_POLYGON,
+    SETTINGS_GP_PAIR_RATE
 )
 from config import settings
 
@@ -1333,8 +1334,6 @@ async def cb_set_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     enabled = await db.get_setting("cryptomus_enabled", "0")=="1"
     gp_enabled = await db.get_setting("ghostpayments_enabled", "0")=="1"
     gp_url = await db.get_setting("ghostpayments_url", settings.GHOSTPAYMENTS_URL or "(not set)")
-    gp_chain = (await db.get_setting("ghostpayments_chain", settings.GHOSTPAYMENTS_CHAIN or "BSC")).upper()
-    gp_token = (await db.get_setting("ghostpayments_token", settings.GHOSTPAYMENTS_TOKEN or "USDT")).upper()
     rows = [
         [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:crypto_toggle")],
         [InlineKeyboardButton(t("adm_toggle_btn", status=f"GhostPayments {t('adm_enabled') if gp_enabled else t('adm_disabled')}"), callback_data="set:gp_toggle")],
@@ -1342,7 +1341,7 @@ async def cb_set_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(t("btn_edit_api_key"), callback_data="set:crypto_key")],
         [InlineKeyboardButton(t("btn_edit_gp_url"), callback_data="set:gp_url")],
         [InlineKeyboardButton(t("btn_edit_gp_key"), callback_data="set:gp_key")],
-        [InlineKeyboardButton(f"Chain: {gp_chain}", callback_data="set:gp_chain"), InlineKeyboardButton(f"Token: {gp_token}", callback_data="set:gp_token")],
+        [InlineKeyboardButton(t("btn_set_gp_pairs"), callback_data="set:gp_pairs")],
         [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
     ]
     await query.edit_message_text(f"🪙 *Crypto Providers*\n\nCryptomus MID: `{mid}`\nGhostPayments URL: `{gp_url}`", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
@@ -1413,44 +1412,91 @@ async def settings_gp_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:crypto"))
     return ConversationHandler.END
 
-async def cb_set_gp_chain(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cb_set_gp_pairs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    rows = [
-        [InlineKeyboardButton("BSC", callback_data="set:gp_chain_val:BSC"), InlineKeyboardButton("POLYGON", callback_data="set:gp_chain_val:POLYGON")],
-        [InlineKeyboardButton(t("btn_back"), callback_data="set:crypto")],
-    ]
-    await query.edit_message_text("Select GhostPayments chain:", reply_markup=InlineKeyboardMarkup(rows))
-
-async def cb_set_gp_chain_val(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    chain = query.data.split(":", 3)[3].upper()
-    await db.set_setting("ghostpayments_chain", chain)
-    token = (await db.get_setting("ghostpayments_token", settings.GHOSTPAYMENTS_TOKEN or "USDT")).upper()
-    if chain=="BSC" and token=="POL":
-        await db.set_setting("ghostpayments_token", "USDT")
-    if chain=="POLYGON" and token=="BNB":
-        await db.set_setting("ghostpayments_token", "USDT")
-    await cb_set_crypto(update, ctx)
-
-async def cb_set_gp_token(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    chain = (await db.get_setting("ghostpayments_chain", settings.GHOSTPAYMENTS_CHAIN or "BSC")).upper()
-    if chain=="BSC":
-        rows = [[InlineKeyboardButton("USDT", callback_data="set:gp_token_val:USDT"), InlineKeyboardButton("BNB", callback_data="set:gp_token_val:BNB")]]
-    else:
-        rows = [[InlineKeyboardButton("USDT", callback_data="set:gp_token_val:USDT"), InlineKeyboardButton("POL", callback_data="set:gp_token_val:POL")]]
+    pairs = await get_gp_pairs()
+    base = await get_base_currency()
+    rows = []
+    for p in pairs:
+        status = "✅" if p.get("enabled") else "❌"
+        rate = p.get("rate", "")
+        rate_info = f"1 {base}={rate} {p['token']}" if rate else t("adm_gp_pair_no_rate")
+        rows.append([InlineKeyboardButton(f"{status} {p['chain']}/{p['token']} — {rate_info}", callback_data=f"gp_pair:detail:{p['chain']}:{p['token']}")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="set:crypto")])
-    await query.edit_message_text("Select GhostPayments token:", reply_markup=InlineKeyboardMarkup(rows))
+    await query.edit_message_text(t("adm_gp_pairs_title"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
-async def cb_set_gp_token_val(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def cb_gp_pair_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    token = query.data.split(":", 3)[3].upper()
-    await db.set_setting("ghostpayments_token", token)
-    await cb_set_crypto(update, ctx)
+    parts = query.data.split(":", 3)
+    chain, token = parts[2], parts[3]
+    pairs = await get_gp_pairs()
+    pair = next((p for p in pairs if p["chain"]==chain and p["token"]==token), None)
+    if not pair:
+        return
+    base = await get_base_currency()
+    enabled = pair.get("enabled", False)
+    rate = pair.get("rate", "")
+    text = t("adm_gp_pair_detail", chain=chain, token=token, status=t("adm_enabled") if enabled else t("adm_disabled"), rate=rate if rate else t("adm_gp_pair_no_rate"), base=base)
+    rows = [
+        [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data=f"gp_pair:toggle:{chain}:{token}")],
+        [InlineKeyboardButton(t("btn_edit_rate"), callback_data=f"gp_pair:rate:{chain}:{token}")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="set:gp_pairs")],
+    ]
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+async def cb_gp_pair_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":", 3)
+    chain, token = parts[2], parts[3]
+    pairs = await get_gp_pairs()
+    for p in pairs:
+        if p["chain"]==chain and p["token"]==token:
+            p["enabled"] = not p.get("enabled", False)
+            break
+    await save_gp_pairs(pairs)
+    await cb_gp_pair_detail(update, ctx)
+
+async def cb_gp_pair_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split(":", 3)
+    chain, token = parts[2], parts[3]
+    ctx.user_data["gp_pair_rate_chain"] = chain
+    ctx.user_data["gp_pair_rate_token"] = token
+    base = await get_base_currency()
+    await query.edit_message_text(t("adm_gp_pair_rate_prompt", token=token, base=base), reply_markup=cancel_kb())
+    return SETTINGS_GP_PAIR_RATE
+
+async def gp_pair_rate_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    chain = ctx.user_data.pop("gp_pair_rate_chain", None)
+    token = ctx.user_data.pop("gp_pair_rate_token", None)
+    if not chain or not token:
+        return ConversationHandler.END
+    try:
+        exchange = Decimal(update.message.text.strip().replace(",", ""))
+        if exchange<=0:
+            raise ValueError
+        rate = str(Decimal("1")/exchange)
+    except Exception:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_GP_PAIR_RATE
+    pairs = await get_gp_pairs()
+    found = False
+    for p in pairs:
+        if p["chain"]==chain and p["token"]==token:
+            p["rate"] = rate
+            found = True
+            break
+    if not found:
+        pairs.append({"chain": chain, "token": token, "enabled": False, "rate": rate})
+    await save_gp_pairs(pairs)
+    await update.message.reply_text(t("adm_gp_pair_rate_updated", chain=chain, token=token), reply_markup=back_kb("set:gp_pairs"))
+    return ConversationHandler.END
 
 async def cb_set_requests(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2090,6 +2136,7 @@ def get_main_conv_handler():
         SETTINGS_TRIAL_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_data)],
         SETTINGS_TRIAL_EXPIRE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_expire)],
         SETTINGS_TRIAL_NODES: [CallbackQueryHandler(trial_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(trial_nodes_done, pattern=r"^trial:nodes_done$")],
+        SETTINGS_GP_PAIR_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, gp_pair_rate_save)],
     }
     entry_points = [
         CommandHandler("start", cmd_start_admin),
@@ -2111,6 +2158,7 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_crypto_key, pattern=r"^set:crypto_key$"),
         CallbackQueryHandler(cb_set_gp_url, pattern=r"^set:gp_url$"),
         CallbackQueryHandler(cb_set_gp_key, pattern=r"^set:gp_key$"),
+        CallbackQueryHandler(cb_gp_pair_rate, pattern=r"^gp_pair:rate:"),
         CallbackQueryHandler(cb_set_support, pattern=r"^set:support$"),
         CallbackQueryHandler(cb_set_sync, pattern=r"^set:sync$"),
         CallbackQueryHandler(cb_set_plan_page_size_consumer, pattern=r"^set:plan_page_size_consumer$"),
@@ -2167,10 +2215,9 @@ def get_handlers():
         CallbackQueryHandler(cb_set_crypto, pattern=r"^set:crypto$"),
         CallbackQueryHandler(cb_crypto_toggle, pattern=r"^set:crypto_toggle$"),
         CallbackQueryHandler(cb_gp_toggle, pattern=r"^set:gp_toggle$"),
-        CallbackQueryHandler(cb_set_gp_chain, pattern=r"^set:gp_chain$"),
-        CallbackQueryHandler(cb_set_gp_chain_val, pattern=r"^set:gp_chain_val:"),
-        CallbackQueryHandler(cb_set_gp_token, pattern=r"^set:gp_token$"),
-        CallbackQueryHandler(cb_set_gp_token_val, pattern=r"^set:gp_token_val:"),
+        CallbackQueryHandler(cb_set_gp_pairs, pattern=r"^set:gp_pairs$"),
+        CallbackQueryHandler(cb_gp_pair_detail, pattern=r"^gp_pair:detail:"),
+        CallbackQueryHandler(cb_gp_pair_toggle, pattern=r"^gp_pair:toggle:"),
         CallbackQueryHandler(cb_set_requests, pattern=r"^set:requests$"),
         CallbackQueryHandler(cb_req_toggle, pattern=r"^set:req_toggle$"),
         CallbackQueryHandler(cb_set_usdt, pattern=r"^set:usdt$"),

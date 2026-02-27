@@ -1,6 +1,14 @@
 import json
 from decimal import Decimal, ROUND_HALF_UP
 
+ALL_GP_PAIRS = [
+    {"chain": "BSC", "token": "USDT"},
+    {"chain": "BSC", "token": "BNB"},
+    {"chain": "POLYGON", "token": "USDT"},
+    {"chain": "POLYGON", "token": "POL"},
+]
+_GP_DECIMALS = {"USDT": 2, "BNB": 6, "POL": 4}
+
 async def get_currencies():
     from core.db import get_setting
     raw = await get_setting("currencies_config", None)
@@ -59,6 +67,30 @@ async def price_for_method(plan_price, method):
 async def fmt_price_for_method(plan_price, method):
     amount, code, decimals = await price_for_method(plan_price, method)
     return f"{fmt(amount, decimals, code)} {code}"
+
+async def get_gp_pairs():
+    from core.db import get_setting
+    raw = await get_setting("ghostpayments_pairs", None)
+    if raw:
+        return json.loads(raw)
+    return [{"chain": p["chain"], "token": p["token"], "enabled": False, "rate": ""} for p in ALL_GP_PAIRS]
+
+async def save_gp_pairs(pairs):
+    from core.db import set_setting
+    await set_setting("ghostpayments_pairs", json.dumps(pairs))
+
+async def get_enabled_gp_pairs():
+    return [p for p in await get_gp_pairs() if p.get("enabled")]
+
+async def price_for_gp_pair(plan_price, chain, token):
+    for p in await get_gp_pairs():
+        if p["chain"]==chain and p["token"]==token:
+            rate = p.get("rate", "")
+            if not rate:
+                return None, token, _GP_DECIMALS.get(token, 2)
+            decimals = _GP_DECIMALS.get(token, 2)
+            return convert(plan_price, rate, decimals), token, decimals
+    return None, token, _GP_DECIMALS.get(token, 2)
 
 async def price_for_code(plan_price, code):
     target = (code or "").upper()

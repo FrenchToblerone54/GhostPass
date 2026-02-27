@@ -9,7 +9,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.ext import ContextTypes, CallbackQueryHandler
 import core.db as db
 import core.ghostgate as gg
-from core.currency import price_for_method, price_for_code, fmt
+from core.currency import price_for_method, price_for_code, fmt, get_enabled_gp_pairs, price_for_gp_pair
 from bot.strings import t
 from bot.guards import ensure_force_join
 from config import settings
@@ -93,26 +93,37 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     btcpay_key = settings.BTCPAY_API_KEY or await db.get_setting("btcpay_api_key", "")
     gp_url = settings.GHOSTPAYMENTS_URL or await db.get_setting("ghostpayments_url", "")
     gp_key = settings.GHOSTPAYMENTS_API_KEY or await db.get_setting("ghostpayments_api_key", "")
-    gp_chain = (await db.get_setting("ghostpayments_chain", settings.GHOSTPAYMENTS_CHAIN or "BSC")).upper()
-    gp_token = (await db.get_setting("ghostpayments_token", settings.GHOSTPAYMENTS_TOKEN or "USDT")).upper()
     gp_enabled = await db.get_setting("ghostpayments_enabled", "0")=="1"
     use_ghostpayments=bool(gp_enabled and gp_url and gp_key)
     use_btcpay=bool(btcpay_url and btcpay_store and btcpay_key)
     if not use_ghostpayments and not use_btcpay and (not merchant_id or not api_key):
         await query.edit_message_text(t("service_unavailable"))
         return
-    amount, code, decimals = await price_for_method(plan["price"], "crypto")
-    gp_amount, gp_code, gp_decimals = await price_for_code(plan["price"], gp_token) if use_ghostpayments else (None, "", 0)
+    if use_ghostpayments:
+        enabled_pairs = await get_enabled_gp_pairs()
+        if len(enabled_pairs)>1:
+            rows = [[InlineKeyboardButton(f"{p['chain']}/{p['token']}", callback_data=f"buy:gp:{plan_id}:{p['chain']}:{p['token']}")] for p in enabled_pairs]
+            rows.append([InlineKeyboardButton(t("btn_back"), callback_data=f"plan:{plan_id}")])
+            await query.edit_message_text(t("gp_pair_select_title"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+            return
+        elif len(enabled_pairs)==1:
+            gp_chain, gp_token = enabled_pairs[0]["chain"], enabled_pairs[0]["token"]
+        else:
+            use_ghostpayments, gp_chain, gp_token = False, "", ""
+    else:
+        gp_chain, gp_token = "", ""
+    gp_amount, gp_code, gp_decimals = await price_for_gp_pair(plan["price"], gp_chain, gp_token) if use_ghostpayments else (None, "", 0)
     if use_ghostpayments and gp_amount is None:
         if use_btcpay or (merchant_id and api_key):
             use_ghostpayments=False
         else:
-            await query.edit_message_text(t("ghostpayments_currency_mismatch", code=code, token=gp_token), parse_mode="Markdown")
+            await query.edit_message_text(t("ghostpayments_no_rate", chain=gp_chain, token=gp_token), parse_mode="Markdown")
             return
-    price_str = f"{fmt(amount, decimals, code)} {code}"
+    amount, code, decimals = await price_for_method(plan["price"], "crypto")
+    price_str = f"{fmt(gp_amount, gp_decimals, gp_code)} {gp_code}" if use_ghostpayments else f"{fmt(amount, decimals, code)} {code}"
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
-    order_id = await db.create_order(uid, plan_id, "crypto", float(amount), code)
+    order_id = await db.create_order(uid, plan_id, "crypto", float(gp_amount if use_ghostpayments else amount), gp_code if use_ghostpayments else code)
     try:
         if use_ghostpayments:
             inv=await create_invoice_ghostpayments(gp_url, gp_key, gp_chain, gp_token, fmt(gp_amount, gp_decimals, gp_code), order_id)
@@ -135,11 +146,47 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("ghostgate_error"))
         return
     await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
-    text = t("crypto_invoice_created", amount=price_str)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Open payment page", url=pay_url)]])
-    await query.edit_message_text(text, reply_markup=kb)
+    await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
     provider="ghostpayments" if use_ghostpayments else ("btcpay" if use_btcpay else "cryptomus")
     asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key, gp_url))
+
+async def cb_buy_gp_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return
+    parts = query.data.split(":", 4)
+    plan_id, gp_chain, gp_token = parts[2], parts[3], parts[4]
+    plan = await db.get_plan(plan_id)
+    if not plan:
+        await query.edit_message_text(t("order_not_found"))
+        return
+    gp_url = settings.GHOSTPAYMENTS_URL or await db.get_setting("ghostpayments_url", "")
+    gp_key = settings.GHOSTPAYMENTS_API_KEY or await db.get_setting("ghostpayments_api_key", "")
+    gp_amount, gp_code, gp_decimals = await price_for_gp_pair(plan["price"], gp_chain, gp_token)
+    if gp_amount is None:
+        await query.edit_message_text(t("ghostpayments_no_rate", chain=gp_chain, token=gp_token), parse_mode="Markdown")
+        return
+    price_str = f"{fmt(gp_amount, gp_decimals, gp_code)} {gp_code}"
+    u = update.effective_user
+    uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    order_id = await db.create_order(uid, plan_id, "crypto", float(gp_amount), gp_code)
+    try:
+        inv = await create_invoice_ghostpayments(gp_url, gp_key, gp_chain, gp_token, fmt(gp_amount, gp_decimals, gp_code), order_id)
+        invoice_id = inv.get("invoice_id") or inv.get("id")
+        pay_url = inv.get("payment_url")
+    except Exception as e:
+        logger.error("GhostPayments invoice error: %s", e)
+        await query.edit_message_text(t("ghostgate_error"))
+        return
+    if not invoice_id or not pay_url:
+        await query.edit_message_text(t("ghostgate_error"))
+        return
+    await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Open payment page", url=pay_url)]])
+    await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
+    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, "", "", ctx.bot, "ghostpayments", "", "", "", gp_url))
 
 async def _poll_invoice(invoice_id, order_id, telegram_id, merchant_id, api_key, bot, provider="cryptomus", btcpay_url="", btcpay_store="", btcpay_key="", gp_url=""):
     for _ in range(120):
@@ -243,4 +290,4 @@ async def run_webhook_server(bot=None):
     logger.info("Cryptomus webhook server started on port 8090")
 
 def get_handlers():
-    return [CallbackQueryHandler(cb_buy_crypto, pattern=r"^buy:crypto:")]
+    return [CallbackQueryHandler(cb_buy_crypto, pattern=r"^buy:crypto:"), CallbackQueryHandler(cb_buy_gp_pick, pattern=r"^buy:gp:")]

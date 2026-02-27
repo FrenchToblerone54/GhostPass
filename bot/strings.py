@@ -263,6 +263,14 @@ _EN = {
     "adm_user_detail": "👤 *User*\nName: {name}\nUsername: {username}\nTelegram ID: `{telegram_id}`\nStatus: {status}\nJoined: {joined}",
     "adm_order_detail": "💰 *Order*\nID: `{order_id}`\nUser: {user}\nPlan: {plan}\nAmount: {amount}\nMethod: {method}\nStatus: {status}\nCreated: {created}",
     "adm_plan_status": "Status: {status}",
+    "btn_set_gp_pairs": "⚙️ GP Pairs & Rates",
+    "adm_gp_pairs_title": "⚙️ *GhostPayments Pairs*\n\nEnable networks/tokens and set conversion rates:",
+    "adm_gp_pair_detail": "⚙️ *{chain}/{token}*\n\nStatus: {status}\nRate: 1 {base} = {rate} {token}",
+    "adm_gp_pair_rate_prompt": "1 {token} = ? {base}\n\n(e.g. enter 40000 if 1 USDT = 40,000 IRT):",
+    "adm_gp_pair_rate_updated": "✅ Rate updated for {chain}/{token}.",
+    "adm_gp_pair_no_rate": "(not set)",
+    "gp_pair_select_title": "🪙 *Select network & token for payment:*",
+    "ghostpayments_no_rate": "⚠️ No conversion rate set for {chain}/{token}. Configure it in Settings → Crypto Providers → GP Pairs & Rates.",
 }
 
 _FA = {
@@ -528,6 +536,14 @@ _FA = {
     "adm_user_detail": "👤 *کاربر*\nنام: {name}\nنام کاربری: {username}\nشناسه تلگرام: `{telegram_id}`\nوضعیت: {status}\nعضویت: {joined}",
     "adm_order_detail": "💰 *سفارش*\nشناسه: `{order_id}`\nکاربر: {user}\nپلان: {plan}\nمبلغ: {amount}\nروش: {method}\nوضعیت: {status}\nتاریخ: {created}",
     "adm_plan_status": "وضعیت: {status}",
+    "btn_set_gp_pairs": "⚙️ جفت‌ها و نرخ‌های GP",
+    "adm_gp_pairs_title": "⚙️ *جفت‌های GhostPayments*\n\nشبکه‌ها/توکن‌ها را فعال کنید و نرخ تبدیل تنظیم کنید:",
+    "adm_gp_pair_detail": "⚙️ *{chain}/{token}*\n\nوضعیت: {status}\nنرخ: ۱ {base} = {rate} {token}",
+    "adm_gp_pair_rate_prompt": "۱ {token} = ? {base}\n\n(مثال: ۴۰۰۰۰ اگر ۱ USDT = ۴۰٬۰۰۰ تومان باشد):",
+    "adm_gp_pair_rate_updated": "✅ نرخ {chain}/{token} بروزرسانی شد.",
+    "adm_gp_pair_no_rate": "(تنظیم نشده)",
+    "gp_pair_select_title": "🪙 *شبکه و توکن پرداخت را انتخاب کنید:*",
+    "ghostpayments_no_rate": "⚠️ نرخ تبدیل برای {chain}/{token} تنظیم نشده. در تنظیمات → ارائه‌دهنده‌های کریپتو → جفت‌های GP تنظیم کنید.",
 }
 
 def t(key, **kwargs):
