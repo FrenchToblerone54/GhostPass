@@ -142,6 +142,7 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     card_enabled = await db.get_setting("card_enabled", "0")=="1"
     crypto_enabled = await db.get_setting("cryptomus_enabled", "0")=="1"
     requests_enabled = await db.get_setting("requests_enabled", "0")=="1"
+    manual_enabled = await db.get_setting("manual_enabled", "1")=="1"
     support = await db.get_setting("support_username", "")
     text = t("plan_detail", name=plan["name"], data_gb=plan["data_gb"], days=plan["days"], ip_limit=plan["ip_limit"])
     prices = ""
@@ -151,18 +152,20 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         prices += f"\n{t('plan_price_line_crypto', price=await fmt_price_for_method(plan['price'], 'crypto'))}"
     if requests_enabled:
         prices += f"\n{t('plan_price_line_request', price=await fmt_price_for_method(plan['price'], 'request'))}"
+    if manual_enabled:
+        prices += f"\n{t('plan_price_line_manual', price=await fmt_price_for_method(plan['price'], 'manual'))}"
     if not prices:
         base = await get_base_currency()
         prices = "\n" + t("plan_price_fallback", price=f"{fmt(Decimal(str(plan['price'])), 0, base)} {base}")
     text += prices
-    if not card_enabled and not crypto_enabled and not requests_enabled:
+    if not card_enabled and not crypto_enabled and not requests_enabled and not manual_enabled:
         if support:
             text += t("support_purchase", support=support)
         else:
             text += t("support_purchase_no_contact")
         await query.edit_message_text(text, reply_markup=back_kb("consumer:plans"), parse_mode="Markdown")
         return
-    kb = plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled)
+    kb = plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled)
     await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
 async def cb_consumer_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     ADMIN_ID: int
     BOT_PROXY: Optional[str] = None
     GHOSTGATE_URL: str = ""
+    BTCPAY_URL: str = ""
+    BTCPAY_STORE_ID: str = ""
+    BTCPAY_API_KEY: str = ""
     SYNC_INTERVAL: int = 60
     LANGUAGE: str = "en"
     AUTO_UPDATE: bool = True

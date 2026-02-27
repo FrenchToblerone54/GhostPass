@@ -11,6 +11,7 @@ import core.db as db
 import core.ghostgate as gg
 from core.currency import price_for_method, fmt
 from bot.strings import t
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,15 @@ async def create_invoice(order_id, amount, currency, merchant_id, api_key):
         r.raise_for_status()
         return r.json()
 
+async def create_invoice_btcpay(order_id, amount, currency, base_url, store_id, api_key):
+    import httpx
+    payload={"amount": float(amount), "currency": currency, "metadata": {"orderId": order_id}}
+    headers={"Authorization": f"token {api_key}", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=20) as c:
+        r=await c.post(f"{base_url.rstrip('/')}/api/v1/stores/{store_id}/invoices", json=payload, headers=headers)
+        r.raise_for_status()
+        return r.json()
+
 async def check_invoice(invoice_id, merchant_id, api_key):
     import httpx
     payload = {"uuid": invoice_id}
@@ -38,6 +48,14 @@ async def check_invoice(invoice_id, merchant_id, api_key):
     headers = {"merchant": merchant_id, "sign": sign, "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=15) as c:
         r = await c.post("https://api.cryptomus.com/v1/payment/info", content=body, headers=headers)
+        r.raise_for_status()
+        return r.json()
+
+async def check_invoice_btcpay(invoice_id, base_url, store_id, api_key):
+    import httpx
+    headers={"Authorization": f"token {api_key}"}
+    async with httpx.AsyncClient(timeout=20) as c:
+        r=await c.get(f"{base_url.rstrip('/')}/api/v1/stores/{store_id}/invoices/{invoice_id}", headers=headers)
         r.raise_for_status()
         return r.json()
 
@@ -51,7 +69,11 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     merchant_id = await db.get_setting("cryptomus_merchant_id", "")
     api_key = await db.get_setting("cryptomus_api_key", "")
-    if not merchant_id or not api_key:
+    btcpay_url = settings.BTCPAY_URL or await db.get_setting("btcpay_url", "")
+    btcpay_store = settings.BTCPAY_STORE_ID or await db.get_setting("btcpay_store_id", "")
+    btcpay_key = settings.BTCPAY_API_KEY or await db.get_setting("btcpay_api_key", "")
+    use_btcpay=bool(btcpay_url and btcpay_store and btcpay_key)
+    if not use_btcpay and (not merchant_id or not api_key):
         await query.edit_message_text(t("service_unavailable"))
         return
     amount, code, decimals = await price_for_method(plan["price"], "crypto")
@@ -60,10 +82,15 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
     order_id = await db.create_order(uid, plan_id, "crypto", float(amount), code)
     try:
-        result = await create_invoice(order_id, fmt(amount, decimals), code, merchant_id, api_key)
-        inv = result.get("result", {})
-        invoice_id = inv.get("uuid")
-        pay_url = inv.get("url")
+        if use_btcpay:
+            inv=await create_invoice_btcpay(order_id, fmt(amount, decimals, code), code, btcpay_url, btcpay_store, btcpay_key)
+            invoice_id=inv.get("id")
+            pay_url=inv.get("checkoutLink")
+        else:
+            result = await create_invoice(order_id, fmt(amount, decimals, code), code, merchant_id, api_key)
+            inv = result.get("result", {})
+            invoice_id = inv.get("uuid")
+            pay_url = inv.get("url")
     except Exception as e:
         logger.error("Cryptomus invoice error: %s", e)
         await query.edit_message_text(t("ghostgate_error"))
@@ -75,17 +102,24 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = t("crypto_invoice_created", amount=price_str)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Open payment page", url=pay_url)]])
     await query.edit_message_text(text, reply_markup=kb)
-    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot))
+    provider="btcpay" if use_btcpay else "cryptomus"
+    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key))
 
-async def _poll_invoice(invoice_id, order_id, telegram_id, merchant_id, api_key, bot):
+async def _poll_invoice(invoice_id, order_id, telegram_id, merchant_id, api_key, bot, provider="cryptomus", btcpay_url="", btcpay_store="", btcpay_key=""):
     for _ in range(120):
         await asyncio.sleep(30)
         try:
             order = await db.get_order(order_id)
             if not order or order["status"]!="pending":
                 return
-            result = await check_invoice(invoice_id, merchant_id, api_key)
-            if result.get("result", {}).get("payment_status") in ("paid", "paid_over"):
+            if provider=="btcpay":
+                result=await check_invoice_btcpay(invoice_id, btcpay_url, btcpay_store, btcpay_key)
+                status=(result.get("status") or "").lower()
+                paid=status in ("processing", "settled", "complete", "completed")
+            else:
+                result = await check_invoice(invoice_id, merchant_id, api_key)
+                paid=result.get("result", {}).get("payment_status") in ("paid", "paid_over")
+            if paid:
                 await _activate_order(order_id, telegram_id, bot)
                 return
         except Exception as e:

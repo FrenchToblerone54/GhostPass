@@ -11,6 +11,7 @@ import bot.handlers.consumer as consumer_h
 import bot.handlers.payment_card as card_h
 import bot.handlers.payment_crypto as crypto_h
 import bot.handlers.payment_request as request_h
+import bot.handlers.payment_manual as manual_h
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,8 @@ def _register_handlers(app: Application):
     for h in crypto_h.get_handlers():
         app.add_handler(h, group=1)
     for h in request_h.get_handlers():
+        app.add_handler(h, group=1)
+    for h in manual_h.get_handlers():
         app.add_handler(h, group=1)
     for h in consumer_h.get_handlers():
         app.add_handler(h, group=2)

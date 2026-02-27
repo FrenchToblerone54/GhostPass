@@ -34,7 +34,7 @@ def confirm_reject_kb(order_id):
         InlineKeyboardButton(t("btn_reject"), callback_data=f"order:reject:{order_id}"),
     ]])
 
-def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled):
+def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled):
     rows = []
     if card_enabled:
         rows.append([InlineKeyboardButton(t("btn_pay_card"), callback_data=f"buy:card:{plan_id}")])
@@ -42,6 +42,8 @@ def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled):
         rows.append([InlineKeyboardButton(t("btn_pay_crypto"), callback_data=f"buy:crypto:{plan_id}")])
     if requests_enabled:
         rows.append([InlineKeyboardButton(t("btn_request_sub"), callback_data=f"buy:request:{plan_id}")])
+    if manual_enabled:
+        rows.append([InlineKeyboardButton(t("btn_pay_manual"), callback_data=f"buy:manual:{plan_id}")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="consumer:plans")])
     return InlineKeyboardMarkup(rows)
 
@@ -69,7 +71,7 @@ def currencies_kb(currencies, base_currency, back_cb):
     return InlineKeyboardMarkup(rows)
 
 def method_select_kb(selected_methods, done_cb, back_cb):
-    all_methods = [("card", t("btn_method_card")), ("crypto", t("btn_method_crypto")), ("request", t("btn_method_request"))]
+    all_methods = [("card", t("btn_method_card")), ("crypto", t("btn_method_crypto")), ("request", t("btn_method_request")), ("manual", t("btn_method_manual"))]
     rows = []
     for code, label in all_methods:
         check = "✅" if code in selected_methods else "⬜"
