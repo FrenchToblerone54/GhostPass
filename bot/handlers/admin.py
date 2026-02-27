@@ -190,7 +190,7 @@ async def cb_plan_detail_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"💾 {plan['data_gb']} GB / 📅 {plan['days']}d / 📱 {plan['ip_limit']} IPs\n"
         f"💰 {plan['price']} {base}\n"
         f"🔗 Nodes: {len(plan['node_ids'])}\n"
-        f"Status: {'✅ Active' if plan['is_active'] else '❌ Inactive'}"
+        t("adm_plan_status", status=t("adm_active") if plan['is_active'] else t("adm_inactive"))
     )
     await query.edit_message_text(text, reply_markup=plan_actions_kb(plan_id, plan["is_active"]), parse_mode="Markdown")
 
@@ -216,12 +216,12 @@ async def cb_plan_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("📦 *Create Plan*\n\nEnter plan name:", parse_mode="Markdown", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_plan_name_prompt"), parse_mode="Markdown", reply_markup=cancel_kb())
     return PLAN_CREATE_NAME
 
 async def plan_get_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["plan_name"] = update.message.text.strip()
-    await update.message.reply_text("Enter data limit in GB (e.g. 30):", reply_markup=cancel_kb())
+    await update.message.reply_text(t("adm_plan_data_prompt"), reply_markup=cancel_kb())
     return PLAN_CREATE_DATA
 
 async def plan_get_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -230,7 +230,7 @@ async def plan_get_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(t("invalid_input"))
         return PLAN_CREATE_DATA
-    await update.message.reply_text("Enter duration in days (e.g. 30):", reply_markup=cancel_kb())
+    await update.message.reply_text(t("adm_plan_days_prompt"), reply_markup=cancel_kb())
     return PLAN_CREATE_DAYS
 
 async def plan_get_days(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -239,7 +239,7 @@ async def plan_get_days(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(t("invalid_input"))
         return PLAN_CREATE_DAYS
-    await update.message.reply_text("Enter IP limit (e.g. 1):", reply_markup=cancel_kb())
+    await update.message.reply_text(t("adm_plan_ip_prompt"), reply_markup=cancel_kb())
     return PLAN_CREATE_IP
 
 async def plan_get_ip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -264,7 +264,7 @@ async def plan_get_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t("ghostgate_error"))
         return ConversationHandler.END
     kb = node_select_kb(nodes, [], "plan:nodes_done", "cancel")
-    await update.message.reply_text("Select nodes for this plan:", reply_markup=kb)
+    await update.message.reply_text(t("adm_plan_nodes_prompt"), reply_markup=kb)
     return PLAN_CREATE_NODES
 
 async def plan_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -305,7 +305,7 @@ async def cb_plan_edit_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     ctx.user_data["editing_plan_id"] = query.data.split(":", 2)[2]
     ctx.user_data["editing_plan_field"] = "price"
-    await query.edit_message_text("Enter new price:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_enter_price"), reply_markup=cancel_kb())
     return PLAN_EDIT_VALUE
 
 async def cb_plan_edit_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -315,7 +315,7 @@ async def cb_plan_edit_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     ctx.user_data["editing_plan_id"] = query.data.split(":", 2)[2]
     ctx.user_data["editing_plan_field"] = "name"
-    await query.edit_message_text("Enter new name:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_enter_name"), reply_markup=cancel_kb())
     return PLAN_EDIT_VALUE
 
 async def plan_edit_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -365,14 +365,14 @@ async def cb_sub_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     data_used = (sub.get("used_bytes") or 0)/1073741824
     data_total = sub.get("data_gb") or 0
-    expire = sub.get("expire_at") or "No Expiry"
-    text = (
-        f"📋 *Subscription*\n"
-        f"ID: `{sub_id}`\n"
-        f"Comment: {sub.get('comment') or '-'}\n"
-        f"Data: {data_used:.2f} GB / {'Unlimited' if data_total==0 else f'{data_total} GB'}\n"
-        f"Expires: {expire}\n"
-        f"Status: {'✅ Active' if sub.get('enabled', 1) else '❌ Disabled'}"
+    expire = sub.get("expire_at") or t("adm_no_expiry")
+    text = t("adm_sub_detail",
+        sub_id=sub_id,
+        comment=sub.get("comment") or "-",
+        data_used=data_used,
+        data_total=t("adm_unlimited") if data_total==0 else f"{data_total} GB",
+        expire=expire,
+        status=t("adm_active") if sub.get("enabled", 1) else t("adm_disabled")
     )
     await query.edit_message_text(text, reply_markup=sub_actions_kb(sub_id, "adm:subs"), parse_mode="Markdown")
 
@@ -400,12 +400,12 @@ async def cb_sub_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Enter subscription comment (username or name):", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_sub_comment_prompt"), reply_markup=cancel_kb())
     return ADMIN_MANUAL_SUB_COMMENT
 
 async def manual_sub_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["msub_comment"] = update.message.text.strip()
-    await update.message.reply_text("Enter data GB (0 for unlimited):", reply_markup=cancel_kb())
+    await update.message.reply_text(t("adm_sub_data_prompt"), reply_markup=cancel_kb())
     return ADMIN_MANUAL_SUB_DATA
 
 async def manual_sub_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -414,7 +414,7 @@ async def manual_sub_data(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(t("invalid_input"))
         return ADMIN_MANUAL_SUB_DATA
-    await update.message.reply_text("Enter duration in days (0 for no expiry):", reply_markup=cancel_kb())
+    await update.message.reply_text(t("adm_sub_days_prompt"), reply_markup=cancel_kb())
     return ADMIN_MANUAL_SUB_DAYS
 
 async def manual_sub_days(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -423,7 +423,7 @@ async def manual_sub_days(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(t("invalid_input"))
         return ADMIN_MANUAL_SUB_DAYS
-    await update.message.reply_text("Enter IP limit (0 for unlimited):", reply_markup=cancel_kb())
+    await update.message.reply_text(t("adm_sub_ip_prompt"), reply_markup=cancel_kb())
     return ADMIN_MANUAL_SUB_IP
 
 async def manual_sub_ip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -435,7 +435,7 @@ async def manual_sub_ip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["msub_nodes"] = []
     nodes = await gg.list_nodes()
     kb = node_select_kb(nodes, [], "msub:nodes_done", "cancel")
-    await update.message.reply_text("Select nodes:", reply_markup=kb)
+    await update.message.reply_text(t("adm_sub_nodes_prompt"), reply_markup=kb)
     return ADMIN_MANUAL_SUB_NODES
 
 async def manual_sub_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -497,20 +497,20 @@ async def cb_users_search_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Enter user ID or @username to search:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_user_search_prompt"), reply_markup=cancel_kb())
     return USER_SEARCH
 
 async def users_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     results = await db.search_users(update.message.text.strip().lstrip("@"))
     if not results:
-        await update.message.reply_text("No users found.", reply_markup=back_kb("adm:users"))
+        await update.message.reply_text(t("adm_no_users"), reply_markup=back_kb("adm:users"))
         return ConversationHandler.END
     rows = []
     for u in results:
         uname = f"@{u['username']}" if u.get("username") else str(u["telegram_id"])
         rows.append([InlineKeyboardButton(f"{u.get('first_name') or ''} {uname}".strip(), callback_data=f"user:detail:{u['id']}")])
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:users")])
-    await update.message.reply_text("Search results:", reply_markup=InlineKeyboardMarkup(rows))
+    await update.message.reply_text(t("adm_search_results"), reply_markup=InlineKeyboardMarkup(rows))
     return ConversationHandler.END
 
 async def cb_user_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -519,16 +519,15 @@ async def cb_user_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = query.data.split(":", 2)[2]
     user = await db.get_user_by_id(uid)
     if not user:
-        await query.edit_message_text("User not found.")
+        await query.edit_message_text(t("adm_user_not_found"))
         return
     uname = f"@{user['username']}" if user.get("username") else "-"
-    text = (
-        f"👤 *User*\n"
-        f"Name: {user.get('first_name') or '-'}\n"
-        f"Username: {uname}\n"
-        f"Telegram ID: `{user['telegram_id']}`\n"
-        f"Status: {'🚫 Banned' if user['is_banned'] else '✅ Active'}\n"
-        f"Joined: {user['created_at'][:10]}"
+    text = t("adm_user_detail",
+        name=user.get("first_name") or "-",
+        username=uname,
+        telegram_id=user["telegram_id"],
+        status=t("adm_banned") if user["is_banned"] else t("adm_active"),
+        joined=user["created_at"][:10]
     )
     await query.edit_message_text(text, reply_markup=user_actions_kb(uid, user["is_banned"], "adm:users"), parse_mode="Markdown")
 
@@ -556,7 +555,7 @@ async def cb_user_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = query.data.split(":", 2)[2]
     orders = await db.get_orders_by_user(uid)
     if not orders:
-        await query.edit_message_text("No orders found.", reply_markup=back_kb(f"user:detail:{uid}"))
+        await query.edit_message_text(t("adm_no_orders"), reply_markup=back_kb(f"user:detail:{uid}"))
         return
     rows = [[InlineKeyboardButton(f"{o['plan_name']} — {o['status']} — {o['created_at'][:10]}", callback_data=f"order:detail:{o['id']}")] for o in orders]
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data=f"user:detail:{uid}")])
@@ -583,7 +582,7 @@ async def cb_orders_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         orders = [o for o in orders if o["status"] in ("pending", "waiting_confirm")]
     rows = [[InlineKeyboardButton(f"{o.get('plan_name','?')} — {o.get('first_name','?')} — {o['status']}", callback_data=f"order:detail:{o['id']}")] for o in orders[:20]]
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:orders")])
-    await query.edit_message_text(f"Orders ({len(orders)}):", reply_markup=InlineKeyboardMarkup(rows))
+    await query.edit_message_text(t("adm_orders_count", count=len(orders)), reply_markup=InlineKeyboardMarkup(rows))
 
 async def cb_order_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -596,10 +595,14 @@ async def cb_order_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = await db.get_user_by_id(order["user_id"])
     plan = await db.get_plan(order["plan_id"])
     uname = f"@{user['username']}" if user and user.get("username") else str(user["telegram_id"] if user else "?")
-    text = (
-        f"💰 *Order*\nID: `{order_id}`\nUser: {uname}\n"
-        f"Plan: {plan['name'] if plan else '?'}\nAmount: {order['amount']} {order['currency']}\n"
-        f"Method: {order['payment_method']}\nStatus: {order['status']}\nCreated: {order['created_at'][:16]}"
+    text = t("adm_order_detail",
+        order_id=order_id,
+        user=uname,
+        plan=plan["name"] if plan else "?",
+        amount=f"{order['amount']} {order['currency']}",
+        method=order["payment_method"],
+        status=order["status"],
+        created=order["created_at"][:16]
     )
     if order.get("receipt_file_id") and order["status"] in ("pending", "waiting_confirm"):
         await query.message.reply_photo(order["receipt_file_id"])
@@ -611,7 +614,7 @@ async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     order_id = query.data.split(":", 2)[2]
     order = await db.get_order(order_id)
     if not order or order["status"] not in ("pending", "waiting_confirm"):
-        await query.answer("Already processed.", show_alert=True)
+        await query.answer(t("adm_already_processed"), show_alert=True)
         return
     plan = await db.get_plan(order["plan_id"])
     user = await db.get_user_by_id(order["user_id"])
@@ -698,7 +701,7 @@ async def cb_admin_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Enter Telegram user ID of the new admin:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_admin_id_prompt"), reply_markup=cancel_kb())
     return ADMIN_ADD_ID
 
 async def admin_add_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -707,7 +710,7 @@ async def admin_add_id(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(t("invalid_input"))
         return ADMIN_ADD_ID
-    await update.message.reply_text("Enter permissions (comma-separated: view, manage_subs, manage_plans, manage_users, superadmin):", reply_markup=cancel_kb())
+    await update.message.reply_text(t("adm_admin_perms_prompt"), reply_markup=cancel_kb())
     return ADMIN_ADD_PERMS
 
 async def admin_add_perms(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -734,7 +737,7 @@ async def cb_admin_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     admin_tid = int(query.data.split(":", 2)[2])
     if admin_tid==settings.ADMIN_ID:
-        await query.answer("Cannot remove root admin.", show_alert=True)
+        await query.answer(t("adm_cannot_remove_root"), show_alert=True)
         return
     await db.remove_admin(admin_tid)
     await query.edit_message_text(t("admin_removed"), reply_markup=back_kb("adm:admins"))
@@ -742,7 +745,7 @@ async def cb_admin_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_adm_settings(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("⚙️ *Settings*", reply_markup=settings_kb(), parse_mode="Markdown")
+    await query.edit_message_text(t("adm_settings_title"), reply_markup=settings_kb(), parse_mode="Markdown")
 
 async def cb_set_gg_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _is_admin(update.effective_user.id):
@@ -750,7 +753,7 @@ async def cb_set_gg_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     current = settings.GHOSTGATE_URL or "(not set)"
-    await query.edit_message_text(f"Current: `{current}`\n\nEnter new GhostGate URL:", reply_markup=cancel_kb(), parse_mode="Markdown")
+    await query.edit_message_text(t("adm_gg_url_prompt", current=current), reply_markup=cancel_kb(), parse_mode="Markdown")
     return SETTINGS_GG_URL
 
 async def settings_gg_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -795,7 +798,7 @@ async def cb_set_card_num(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Enter new card number:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_enter_card_num"), reply_markup=cancel_kb())
     return SETTINGS_CARD_NUM
 
 async def settings_card_num(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -808,7 +811,7 @@ async def cb_set_card_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Enter cardholder name:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_enter_card_name"), reply_markup=cancel_kb())
     return SETTINGS_CARD_NAME
 
 async def settings_card_name(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -841,7 +844,7 @@ async def cb_set_crypto_mid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Enter Cryptomus Merchant ID:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_enter_crypto_mid"), reply_markup=cancel_kb())
     return SETTINGS_CRYPTO_MID
 
 async def settings_crypto_mid(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -854,7 +857,7 @@ async def cb_set_crypto_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Enter Cryptomus API Key:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_enter_crypto_key"), reply_markup=cancel_kb())
     return SETTINGS_CRYPTO_KEY
 
 async def settings_crypto_key(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -885,7 +888,7 @@ async def cb_set_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     current = await db.get_setting("support_username", "(not set)")
-    await query.edit_message_text(f"Current: {current}\n\nEnter support @username:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_support_prompt", current=current), reply_markup=cancel_kb())
     return SETTINGS_SUPPORT
 
 async def settings_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -898,7 +901,7 @@ async def cb_set_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(f"Current: {settings.SYNC_INTERVAL}s\n\nEnter sync interval in seconds:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_sync_prompt", current=settings.SYNC_INTERVAL), reply_markup=cancel_kb())
     return SETTINGS_SYNC
 
 async def settings_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -933,7 +936,7 @@ async def cb_curr_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     base = await get_base_currency()
     c = next((x for x in currencies if x["code"]==code), None)
     if not c:
-        await query.edit_message_text("Currency not found.")
+        await query.edit_message_text(t("adm_currency_not_found"))
         return
     methods_str = ", ".join(c.get("methods", [])) or "-"
     rate_str = c.get("rate", "1")
@@ -1066,7 +1069,7 @@ async def cb_curr_set_base_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     await query.answer()
     currencies = await get_currencies()
     if not currencies:
-        await query.answer("No currencies configured.", show_alert=True)
+        await query.answer(t("adm_no_currencies_configured"), show_alert=True)
         return
     await query.edit_message_text(t("curr_set_base_prompt"), reply_markup=base_select_kb(currencies, "set:currencies"))
 
@@ -1088,7 +1091,7 @@ async def cb_subs_search_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text("Enter subscription ID or comment to search:", reply_markup=cancel_kb())
+    await query.edit_message_text(t("adm_sub_search_prompt"), reply_markup=cancel_kb())
     return SUB_SEARCH
 
 async def subs_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1096,11 +1099,11 @@ async def subs_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     subs = await gg.list_subscriptions(per_page=0)
     results = [s for s in subs if query_str.lower() in (s.get("comment") or "").lower() or query_str in s.get("id", "")]
     if not results:
-        await update.message.reply_text("No subscriptions found.", reply_markup=back_kb("adm:subs"))
+        await update.message.reply_text(t("adm_no_subs_found"), reply_markup=back_kb("adm:subs"))
         return ConversationHandler.END
     rows = [[InlineKeyboardButton(s.get("comment") or s["id"][:12], callback_data=f"sub:detail:{s['id']}")] for s in results[:20]]
     rows.append([InlineKeyboardButton("⬅️ Back", callback_data="adm:subs")])
-    await update.message.reply_text("Search results:", reply_markup=InlineKeyboardMarkup(rows))
+    await update.message.reply_text(t("adm_search_results"), reply_markup=InlineKeyboardMarkup(rows))
     return ConversationHandler.END
 
 async def cb_set_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1209,7 +1212,7 @@ async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
               "new_curr_code", "new_curr_name", "new_curr_decimals", "new_curr_methods", "editing_curr_code",
               "rejecting_order_id", "pending_order_id", "request_order_id", "trial_nodes"):
         ctx.user_data.pop(k, None)
-    await query.edit_message_text("❌ Cancelled.", reply_markup=back_kb("adm:back"))
+    await query.edit_message_text(t("adm_cancelled"), reply_markup=back_kb("adm:back"))
     return ConversationHandler.END
 
 def get_main_conv_handler():

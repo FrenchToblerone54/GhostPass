@@ -77,7 +77,7 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     order_id = query.data.split(":", 2)[2]
     order = await db.get_order(order_id)
     if not order or order["status"]!="pending":
-        await query.edit_message_text("Already processed.")
+        await query.edit_message_text(t("adm_already_processed"))
         return
     plan = await db.get_plan(order["plan_id"])
     user = await db.get_user_by_id(order["user_id"])
@@ -110,7 +110,7 @@ async def cb_decline_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     order_id = query.data.split(":", 2)[2]
     order = await db.get_order(order_id)
     if not order or order["status"]!="pending":
-        await query.edit_message_text("Already processed.")
+        await query.edit_message_text(t("adm_already_processed"))
         return
     await db.update_order(order_id, status="rejected")
     user = await db.get_user_by_id(order["user_id"])
