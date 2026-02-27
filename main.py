@@ -5,6 +5,12 @@ import time
 
 logger=logging.getLogger(__name__)
 
+async def _safe_wait(coro, timeout, name):
+    try:
+        await asyncio.wait_for(coro, timeout=timeout)
+    except Exception as e:
+        logger.warning("%s failed/timed out: %s", name, e)
+
 async def _run_once():
     from bot.app import build_app
     app=build_app()
@@ -13,6 +19,8 @@ async def _run_once():
             await app.post_init(app)
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
+        watchdog_task=None
+        idle_task=None
         async def _watchdog():
             fails=0
             while True:
@@ -26,12 +34,22 @@ async def _run_once():
                     if fails>=3:
                         raise RuntimeError("Watchdog restart")
         try:
-            await asyncio.gather(asyncio.sleep(float("inf")), _watchdog())
+            watchdog_task=asyncio.create_task(_watchdog())
+            idle_task=asyncio.create_task(asyncio.sleep(float("inf")))
+            done,_=await asyncio.wait({watchdog_task, idle_task}, return_when=asyncio.FIRST_EXCEPTION)
+            for t in done:
+                exc=t.exception()
+                if exc:
+                    raise exc
         finally:
-            await app.updater.stop()
-            await app.stop()
+            if watchdog_task and not watchdog_task.done():
+                watchdog_task.cancel()
+            if idle_task and not idle_task.done():
+                idle_task.cancel()
+            await _safe_wait(app.updater.stop(), 15, "updater.stop")
+            await _safe_wait(app.stop(), 15, "app.stop")
             if app.post_stop:
-                await app.post_stop(app)
+                await _safe_wait(app.post_stop(app), 10, "post_stop")
 
 if __name__=="__main__":
     if len(sys.argv)>1:
