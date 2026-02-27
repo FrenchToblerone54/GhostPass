@@ -27,7 +27,7 @@ from bot.states import (
     WIZARD_CRYPTO_MID, WIZARD_CRYPTO_KEY, WIZARD_CURRENCY,
     PLAN_CREATE_NAME, PLAN_CREATE_DATA, PLAN_CREATE_DAYS,
     PLAN_CREATE_IP, PLAN_CREATE_PRICE, PLAN_CREATE_NODES,
-    PLAN_EDIT_VALUE,
+    PLAN_EDIT_VALUE, PLAN_EDIT_NODES, PLAN_BULK_NODES,
     ADMIN_ADD_ID, ADMIN_ADD_PERMS,
     ADMIN_MANUAL_SUB_COMMENT, ADMIN_MANUAL_SUB_DATA, ADMIN_MANUAL_SUB_DAYS,
     ADMIN_MANUAL_SUB_IP, ADMIN_MANUAL_SUB_NODES,
@@ -42,6 +42,33 @@ from bot.states import (
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+def _fmt_plan_price_display(price, base):
+    if base=="IRT":
+        try:
+            i=int(float(price))
+            if float(price)==i and i>=1000 and i%1000==0:
+                return f"{i//1000}k"
+        except Exception:
+            pass
+    return str(price)
+
+async def _parse_plan_price_input(raw):
+    try:
+        val=Decimal(raw.replace(",", ""))
+    except Exception:
+        return None
+    if val<=0:
+        return None
+    base=await get_base_currency()
+    if base=="IRT":
+        if val!=val.to_integral_value():
+            return None
+        iv=int(val)
+        if iv<1000 or iv%1000!=0:
+            return None
+        return float(iv)
+    return float(val)
 
 async def _is_admin(telegram_id):
     return await db.is_admin(telegram_id, settings.ADMIN_ID)
@@ -190,8 +217,9 @@ async def cb_adm_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rows = []
     for p in plans:
         status = "✅" if p["is_active"] else "❌"
-        rows.append([InlineKeyboardButton(f"{status} {p['name']} — {p['price']} {base}", callback_data=f"plan:detail:{p['id']}")])
+        rows.append([InlineKeyboardButton(f"{status} {p['name']} — {_fmt_plan_price_display(p['price'], base)} {base}", callback_data=f"plan:detail:{p['id']}")])
     rows.append([InlineKeyboardButton(t("adm_create_plan_btn"), callback_data="plan:create")])
+    rows.append([InlineKeyboardButton(t("adm_bulk_nodes_btn"), callback_data="plans:bulk_nodes")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     await query.edit_message_text(t("plans_title"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
@@ -207,7 +235,7 @@ async def cb_plan_detail_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = (
         f"📦 *{plan['name']}*\n"
         f"💾 {plan['data_gb']} GB / 📅 {plan['days']}d / 📱 {plan['ip_limit']} IPs\n"
-        f"💰 {plan['price']} {base}\n"
+        f"💰 {_fmt_plan_price_display(plan['price'], base)} {base}\n"
         f"🔗 Nodes: {len(plan['node_ids'])}\n" +
         t("adm_plan_status", status=t("adm_active") if plan['is_active'] else t("adm_inactive"))
     )
@@ -272,11 +300,15 @@ async def plan_get_ip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return PLAN_CREATE_PRICE
 
 async def plan_get_price(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        ctx.user_data["plan_price"] = float(update.message.text.strip())
-    except ValueError:
-        await update.message.reply_text(t("invalid_input"))
+    price=await _parse_plan_price_input(update.message.text.strip())
+    if price is None:
+        base=await get_base_currency()
+        if base=="IRT":
+            await update.message.reply_text(t("irt_price_step"))
+        else:
+            await update.message.reply_text(t("invalid_input"))
         return PLAN_CREATE_PRICE
+    ctx.user_data["plan_price"] = price
     ctx.user_data["plan_nodes"] = []
     nodes = await gg.list_nodes()
     if not nodes:
@@ -344,13 +376,99 @@ async def plan_edit_value(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     val = update.message.text.strip()
     if field=="price":
-        try:
-            val = float(val)
-        except ValueError:
-            await update.message.reply_text(t("invalid_input"))
+        val=await _parse_plan_price_input(val)
+        if val is None:
+            base=await get_base_currency()
+            if base=="IRT":
+                await update.message.reply_text(t("irt_price_step"))
+            else:
+                await update.message.reply_text(t("invalid_input"))
             return PLAN_EDIT_VALUE
     await db.update_plan(plan_id, **{field: val})
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:plans"))
+    return ConversationHandler.END
+
+async def cb_plan_edit_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    plan_id=query.data.split(":", 3)[3]
+    plan=await db.get_plan(plan_id)
+    if not plan:
+        await query.edit_message_text(t("order_not_found"))
+        return ConversationHandler.END
+    nodes=await gg.list_nodes()
+    if not nodes:
+        await query.edit_message_text(t("ghostgate_error"))
+        return ConversationHandler.END
+    selected=list(plan.get("node_ids", []))
+    ctx.user_data["editing_plan_nodes_id"]=plan_id
+    ctx.user_data["editing_plan_nodes"]=selected
+    await query.edit_message_text(t("adm_plan_nodes_edit_prompt"), reply_markup=node_select_kb(nodes, selected, "plan:edit_nodes_done", f"plan:detail:{plan_id}"))
+    return PLAN_EDIT_NODES
+
+async def plan_edit_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    node_id=int(query.data.split(":", 1)[1])
+    selected=ctx.user_data.get("editing_plan_nodes", [])
+    if node_id in selected:
+        selected.remove(node_id)
+    else:
+        selected.append(node_id)
+    ctx.user_data["editing_plan_nodes"]=selected
+    nodes=await gg.list_nodes()
+    plan_id=ctx.user_data.get("editing_plan_nodes_id", "")
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, selected, "plan:edit_nodes_done", f"plan:detail:{plan_id}"))
+    return PLAN_EDIT_NODES
+
+async def plan_edit_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    plan_id=ctx.user_data.pop("editing_plan_nodes_id", None)
+    selected=ctx.user_data.pop("editing_plan_nodes", [])
+    if not plan_id:
+        return ConversationHandler.END
+    await db.update_plan(plan_id, node_ids=selected)
+    await query.edit_message_text(t("setting_saved"), reply_markup=back_kb(f"plan:detail:{plan_id}"))
+    return ConversationHandler.END
+
+async def cb_plans_bulk_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    nodes=await gg.list_nodes()
+    if not nodes:
+        await query.edit_message_text(t("ghostgate_error"))
+        return ConversationHandler.END
+    ctx.user_data["bulk_plan_nodes"]=[]
+    await query.edit_message_text(t("adm_plan_nodes_bulk_prompt"), reply_markup=node_select_kb(nodes, [], "plans:bulk_nodes_done", "adm:plans"))
+    return PLAN_BULK_NODES
+
+async def plans_bulk_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    node_id=int(query.data.split(":", 1)[1])
+    selected=ctx.user_data.get("bulk_plan_nodes", [])
+    if node_id in selected:
+        selected.remove(node_id)
+    else:
+        selected.append(node_id)
+    ctx.user_data["bulk_plan_nodes"]=selected
+    nodes=await gg.list_nodes()
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, selected, "plans:bulk_nodes_done", "adm:plans"))
+    return PLAN_BULK_NODES
+
+async def plans_bulk_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    selected=ctx.user_data.pop("bulk_plan_nodes", [])
+    plans=await db.list_plans(active_only=False)
+    for plan in plans:
+        await db.update_plan(plan["id"], node_ids=selected)
+    await query.edit_message_text(t("adm_plan_nodes_bulk_done", count=len(plans)), reply_markup=back_kb("adm:plans"))
     return ConversationHandler.END
 
 async def cb_adm_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1227,7 +1345,7 @@ async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     for k in ("plan_name", "plan_data", "plan_days", "plan_ip", "plan_price", "plan_nodes",
               "msub_comment", "msub_data", "msub_days", "msub_ip", "msub_nodes",
-              "new_admin_id", "editing_plan_id", "editing_plan_field",
+              "new_admin_id", "editing_plan_id", "editing_plan_field", "editing_plan_nodes_id", "editing_plan_nodes", "bulk_plan_nodes",
               "new_curr_code", "new_curr_name", "new_curr_decimals", "new_curr_methods", "editing_curr_code",
               "rejecting_order_id", "pending_order_id", "request_order_id", "trial_nodes"):
         ctx.user_data.pop(k, None)
@@ -1250,6 +1368,8 @@ def get_main_conv_handler():
         PLAN_CREATE_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_get_price)],
         PLAN_CREATE_NODES: [CallbackQueryHandler(plan_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(plan_nodes_done, pattern=r"^plan:nodes_done$")],
         PLAN_EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, plan_edit_value)],
+        PLAN_EDIT_NODES: [CallbackQueryHandler(plan_edit_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(plan_edit_nodes_done, pattern=r"^plan:edit_nodes_done$")],
+        PLAN_BULK_NODES: [CallbackQueryHandler(plans_bulk_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(plans_bulk_nodes_done, pattern=r"^plans:bulk_nodes_done$")],
         ADMIN_ADD_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_id)],
         ADMIN_ADD_PERMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_add_perms)],
         ADMIN_MANUAL_SUB_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_comment)],
@@ -1282,6 +1402,8 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_plan_create, pattern=r"^plan:create$"),
         CallbackQueryHandler(cb_plan_edit_price, pattern=r"^plan:edit_price:"),
         CallbackQueryHandler(cb_plan_edit_name, pattern=r"^plan:edit_name:"),
+        CallbackQueryHandler(cb_plan_edit_nodes, pattern=r"^plan:edit_nodes:"),
+        CallbackQueryHandler(cb_plans_bulk_nodes, pattern=r"^plans:bulk_nodes$"),
         CallbackQueryHandler(cb_sub_create, pattern=r"^sub:create$"),
         CallbackQueryHandler(cb_admin_add, pattern=r"^admin:add$"),
         CallbackQueryHandler(cb_users_search_prompt, pattern=r"^users:search$"),

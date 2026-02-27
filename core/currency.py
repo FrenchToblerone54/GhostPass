@@ -32,9 +32,12 @@ def _quantize(amount, decimals):
 def convert(plan_price, rate, decimals):
     return _quantize(Decimal(str(plan_price))*Decimal(str(rate)), decimals)
 
-def fmt(amount, decimals):
+def fmt(amount, decimals, code=""):
     if decimals==0:
-        return str(int(amount))
+        i=int(amount)
+        if code=="IRT" and i>=1000 and i%1000==0:
+            return f"{i//1000}k"
+        return str(i)
     s = f"{amount:.{decimals}f}".rstrip("0").rstrip(".")
     return s
 
@@ -48,4 +51,4 @@ async def price_for_method(plan_price, method):
 
 async def fmt_price_for_method(plan_price, method):
     amount, code, decimals = await price_for_method(plan_price, method)
-    return f"{fmt(amount, decimals)} {code}"
+    return f"{fmt(amount, decimals, code)} {code}"

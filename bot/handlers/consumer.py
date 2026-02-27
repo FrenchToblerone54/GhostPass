@@ -42,7 +42,15 @@ async def _show_plans(update, ctx):
         return
     text = t("plans_header") + "\n"
     for p in plans:
-        text += f"\n*{p['name']}* — {p['data_gb']} GB / {p['days']}d — {p['price']} {base}"
+        price=str(p["price"])
+        if base=="IRT":
+            try:
+                i=int(float(p["price"]))
+                if float(p["price"])==i and i>=1000 and i%1000==0:
+                    price=f"{i//1000}k"
+            except Exception:
+                pass
+        text += f"\n*{p['name']}* — {p['data_gb']} GB / {p['days']}d — {price} {base}"
     kb = plans_kb(plans, base)
     if update.message:
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")

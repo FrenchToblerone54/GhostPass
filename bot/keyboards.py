@@ -1,6 +1,16 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from bot.strings import t
 
+def _fmt_plan_price(price, base_currency):
+    if base_currency=="IRT":
+        try:
+            i=int(float(price))
+            if float(price)==i and i>=1000 and i%1000==0:
+                return f"{i//1000}k"
+        except Exception:
+            pass
+    return str(price)
+
 def main_consumer_kb(show_trial=False):
     rows = [[t("btn_consumer_plans"), t("btn_consumer_status")], [t("btn_consumer_support")]]
     if show_trial:
@@ -36,7 +46,7 @@ def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled):
     return InlineKeyboardMarkup(rows)
 
 def plans_kb(plans, base_currency="IRT"):
-    rows = [[InlineKeyboardButton(f"{p['name']} — {p['price']} {base_currency}", callback_data=f"plan:{p['id']}")] for p in plans]
+    rows = [[InlineKeyboardButton(f"{p['name']} — {_fmt_plan_price(p['price'], base_currency)} {base_currency}", callback_data=f"plan:{p['id']}")] for p in plans]
     return InlineKeyboardMarkup(rows)
 
 def settings_kb():
@@ -110,6 +120,7 @@ def plan_actions_kb(plan_id, is_active):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(toggle_label, callback_data=f"plan:toggle:{plan_id}")],
         [InlineKeyboardButton(t("btn_edit_price"), callback_data=f"plan:edit_price:{plan_id}"), InlineKeyboardButton(t("btn_edit_name"), callback_data=f"plan:edit_name:{plan_id}")],
+        [InlineKeyboardButton(t("btn_edit_nodes"), callback_data=f"plan:edit_nodes:{plan_id}")],
         [InlineKeyboardButton(t("btn_delete"), callback_data=f"plan:delete:{plan_id}")],
         [InlineKeyboardButton(t("btn_back"), callback_data="adm:plans")],
     ])
