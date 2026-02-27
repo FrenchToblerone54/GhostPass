@@ -9,6 +9,8 @@ async def _run_once():
     from bot.app import build_app
     app=build_app()
     async with app:
+        if app.post_init:
+            await app.post_init(app)
         await app.start()
         await app.updater.start_polling(drop_pending_updates=True)
         async def _watchdog():
@@ -28,6 +30,8 @@ async def _run_once():
         finally:
             await app.updater.stop()
             await app.stop()
+            if app.post_stop:
+                await app.post_stop(app)
 
 if __name__=="__main__":
     if len(sys.argv)>1:
