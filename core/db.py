@@ -17,58 +17,14 @@ def _open():
         db.close()
 
 def _migrate_v1(db):
-    db.executescript("""
-CREATE TABLE IF NOT EXISTS users (
-    id          TEXT PRIMARY KEY,
-    telegram_id INTEGER UNIQUE NOT NULL,
-    username    TEXT,
-    first_name  TEXT,
-    is_banned   INTEGER DEFAULT 0,
-    created_at  TEXT DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS plans (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    data_gb     REAL NOT NULL,
-    days        INTEGER NOT NULL,
-    ip_limit    INTEGER NOT NULL DEFAULT 1,
-    price       REAL NOT NULL,
-    node_ids    TEXT NOT NULL DEFAULT '[]',
-    is_active   INTEGER DEFAULT 1,
-    sort_order  INTEGER DEFAULT 0,
-    created_at  TEXT DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS orders (
-    id                   TEXT PRIMARY KEY,
-    user_id              TEXT NOT NULL REFERENCES users(id),
-    plan_id              TEXT NOT NULL REFERENCES plans(id),
-    ghostgate_sub_id     TEXT,
-    payment_method       TEXT NOT NULL,
-    status               TEXT NOT NULL DEFAULT 'pending',
-    amount               REAL NOT NULL,
-    currency             TEXT NOT NULL,
-    cryptomus_invoice_id TEXT,
-    receipt_file_id      TEXT,
-    created_at           TEXT DEFAULT (datetime('now')),
-    paid_at              TEXT
-);
-CREATE TABLE IF NOT EXISTS admins (
-    telegram_id INTEGER PRIMARY KEY,
-    added_by    INTEGER NOT NULL,
-    permissions TEXT NOT NULL DEFAULT '["view"]',
-    created_at  TEXT DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS settings (
-    key   TEXT PRIMARY KEY,
-    value TEXT
-);
-CREATE TABLE IF NOT EXISTS trial_claims (
-    user_id          TEXT PRIMARY KEY REFERENCES users(id),
-    claimed_at       TEXT DEFAULT (datetime('now')),
-    ghostgate_sub_id TEXT
-);
-PRAGMA user_version=1;
-""")
+    db.execute("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, telegram_id INTEGER UNIQUE NOT NULL, username TEXT, first_name TEXT, is_banned INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')))")
+    db.execute("CREATE TABLE IF NOT EXISTS plans (id TEXT PRIMARY KEY, name TEXT NOT NULL, data_gb REAL NOT NULL, days INTEGER NOT NULL, ip_limit INTEGER NOT NULL DEFAULT 1, price REAL NOT NULL, node_ids TEXT NOT NULL DEFAULT '[]', is_active INTEGER DEFAULT 1, sort_order INTEGER DEFAULT 0, created_at TEXT DEFAULT (datetime('now')))")
+    db.execute("CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), plan_id TEXT NOT NULL REFERENCES plans(id), ghostgate_sub_id TEXT, payment_method TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', amount REAL NOT NULL, currency TEXT NOT NULL, cryptomus_invoice_id TEXT, receipt_file_id TEXT, created_at TEXT DEFAULT (datetime('now')), paid_at TEXT)")
+    db.execute("CREATE TABLE IF NOT EXISTS admins (telegram_id INTEGER PRIMARY KEY, added_by INTEGER NOT NULL, permissions TEXT NOT NULL DEFAULT '[\"view\"]', created_at TEXT DEFAULT (datetime('now')))")
+    db.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    db.execute("CREATE TABLE IF NOT EXISTS trial_claims (user_id TEXT PRIMARY KEY REFERENCES users(id), claimed_at TEXT DEFAULT (datetime('now')), ghostgate_sub_id TEXT)")
+    db.execute("PRAGMA user_version=1")
+    db.commit()
 
 async def init_db():
     def _sync():
