@@ -54,9 +54,13 @@ async def cmd_mystatus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await _check_banned(update):
         return
     orders = await db.get_user_paid_orders(uid)
+    trial = await db.get_user_trial_claim(uid)
+    if trial:
+        orders.append({"plan_name": t("trial_plan_name"), "ghostgate_sub_id": trial.get("ghostgate_sub_id")})
     if not orders:
         await update.message.reply_text(t("no_active_subs"))
         return
+    shown = 0
     for order in orders:
         sub_id = order.get("ghostgate_sub_id")
         if not sub_id:
@@ -79,6 +83,9 @@ async def cmd_mystatus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_regen_link"), callback_data=f"sub:regen:{sub_id}")]])
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+        shown += 1
+    if shown==0:
+        await update.message.reply_text(t("no_active_subs"))
 
 async def cb_regen_sub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query

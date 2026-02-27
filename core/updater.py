@@ -11,7 +11,7 @@ from pathlib import Path
 logger=logging.getLogger(__name__)
 
 GITHUB_REPO="FrenchToblerone54/GhostPass"
-VERSION="v0.1.16"
+VERSION="v0.1.17"
 
 class Updater:
     def __init__(self, check_interval=300, check_on_startup=True, http_proxy="", https_proxy=""):

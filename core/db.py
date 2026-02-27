@@ -310,6 +310,13 @@ async def create_trial_claim(user_id, ghostgate_sub_id):
             db.commit()
     await asyncio.to_thread(_sync)
 
+async def get_user_trial_claim(user_id):
+    def _sync():
+        with _open() as db:
+            row = db.execute("SELECT * FROM trial_claims WHERE user_id=?", (user_id,)).fetchone()
+            return dict(row) if row else None
+    return await asyncio.to_thread(_sync)
+
 async def update_ghostgate_sub_id(old_sub_id, new_sub_id):
     def _sync():
         with _open() as db:
