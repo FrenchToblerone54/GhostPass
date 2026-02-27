@@ -7,7 +7,7 @@ from config import settings
 
 @contextmanager
 def _open():
-    db = sqlite3.connect(settings.DB_PATH)
+    db = sqlite3.connect(settings.DB_PATH, isolation_level=None)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA journal_mode=WAL")
     db.execute("PRAGMA foreign_keys=ON")
