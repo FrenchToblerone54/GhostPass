@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 import core.db as db
 import core.ghostgate as gg
-from core.updater import Updater
+from core.updater import Updater, VERSION
 from core.currency import (
     get_currencies, save_currencies, get_base_currency, set_base_currency,
     convert, fmt as cfmt
@@ -96,7 +96,7 @@ async def cmd_start_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not settings.GHOSTGATE_URL:
         await update.message.reply_text(t("wizard_step1"), parse_mode="Markdown")
         return WIZARD_URL
-    await update.message.reply_text(t("admin_menu_title"), reply_markup=main_admin_kb(), parse_mode="Markdown")
+    await update.message.reply_text(t("admin_menu_title", version=VERSION), reply_markup=main_admin_kb(), parse_mode="Markdown")
     return ConversationHandler.END
 
 async def wizard_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -172,7 +172,7 @@ async def wizard_currency(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     currency = update.message.text.strip().upper()
     await _wizard_save(ctx, currency)
     await update.message.reply_text(t("wizard_done"))
-    await update.message.reply_text(t("admin_menu_title"), reply_markup=main_admin_kb(), parse_mode="Markdown")
+    await update.message.reply_text(t("admin_menu_title", version=VERSION), reply_markup=main_admin_kb(), parse_mode="Markdown")
     return ConversationHandler.END
 
 async def _wizard_save(ctx, base_currency):
@@ -203,7 +203,7 @@ async def _wizard_save(ctx, base_currency):
 async def cb_adm_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    await query.edit_message_text(t("admin_menu_title"), reply_markup=main_admin_kb(), parse_mode="Markdown")
+    await query.edit_message_text(t("admin_menu_title", version=VERSION), reply_markup=main_admin_kb(), parse_mode="Markdown")
 
 async def cb_adm_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query=update.callback_query
