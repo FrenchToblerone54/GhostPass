@@ -49,7 +49,7 @@ def convert(plan_price, rate, decimals):
 
 def fmt(amount, decimals, code=""):
     if decimals==0:
-        i=int(amount)
+        i=int(amount.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         if code=="IRT" and i>=1000 and i%1000==0:
             return f"{i//1000}k"
         return str(i)

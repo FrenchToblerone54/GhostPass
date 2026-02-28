@@ -9,7 +9,7 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.ext import ContextTypes, CallbackQueryHandler
 import core.db as db
 import core.ghostgate as gg
-from core.currency import price_for_method, price_for_code, fmt, get_enabled_gp_pairs, price_for_gp_pair
+from core.currency import price_for_method, fmt, get_enabled_gp_pairs, price_for_gp_pair
 from bot.strings import t
 from bot.guards import ensure_force_join
 from config import settings
