@@ -325,6 +325,14 @@ async def update_ghostgate_sub_id(old_sub_id, new_sub_id):
             db.commit()
     await asyncio.to_thread(_sync)
 
+async def nullify_ghostgate_sub_id(sub_id):
+    def _sync():
+        with _open() as db:
+            db.execute("UPDATE orders SET ghostgate_sub_id=NULL WHERE ghostgate_sub_id=?", (sub_id,))
+            db.execute("UPDATE trial_claims SET ghostgate_sub_id=NULL WHERE ghostgate_sub_id=?", (sub_id,))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
 async def get_orders_by_invoice(invoice_id):
     def _sync():
         with _open() as db:

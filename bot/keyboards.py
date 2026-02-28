@@ -117,6 +117,17 @@ def yes_no_kb(yes_cb, no_cb):
 def cancel_kb():
     return InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_cancel"), callback_data="cancel")]])
 
+def subs_list_kb(subs):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(f"📦 {s['plan_name']}", callback_data=f"sub:detail:{s['ghostgate_sub_id']}")] for s in subs if s.get("ghostgate_sub_id")])
+
+def sub_detail_kb(sub_id, enabled):
+    toggle_label = t("btn_sub_disable") if enabled else t("btn_sub_enable")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t("btn_regen_link"), callback_data=f"sub:regen:{sub_id}"), InlineKeyboardButton(toggle_label, callback_data=f"sub:toggle:{sub_id}")],
+        [InlineKeyboardButton(t("btn_delete"), callback_data=f"sub:delete:{sub_id}")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="sub:list")],
+    ])
+
 def sub_actions_kb(sub_id, back_cb):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t("btn_sub_stats"), callback_data=f"sub:stats:{sub_id}")],
