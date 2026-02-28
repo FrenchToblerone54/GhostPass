@@ -18,7 +18,7 @@ async def _run_once():
         if app.post_init:
             await app.post_init(app)
         await app.start()
-        await app.updater.start_polling(drop_pending_updates=True)
+        await app.updater.start_polling(drop_pending_updates=True, timeout=10, bootstrap_retries=-1)
         watchdog_task=None
         idle_task=None
         async def _watchdog():
