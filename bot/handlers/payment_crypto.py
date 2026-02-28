@@ -146,7 +146,7 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("ghostgate_error"))
         return
     await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Open payment page", url=pay_url)]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_open_payment"), url=pay_url)]])
     await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
     provider="ghostpayments" if use_ghostpayments else ("btcpay" if use_btcpay else "cryptomus")
     asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key, gp_url))
@@ -184,7 +184,7 @@ async def cb_buy_gp_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("ghostgate_error"))
         return
     await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Open payment page", url=pay_url)]])
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_open_payment"), url=pay_url)]])
     await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
     asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, "", "", ctx.bot, "ghostpayments", "", "", "", gp_url))
 
