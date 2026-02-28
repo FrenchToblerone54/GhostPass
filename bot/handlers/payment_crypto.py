@@ -240,6 +240,13 @@ async def _activate_order(order_id, telegram_id, bot):
     sub_url = result.get("url", "")
     now = datetime.now(timezone.utc).isoformat()
     await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=now)
+    u_name = f"@{user['username']}" if user.get("username") else str(user["telegram_id"])
+    admin_caption = t("crypto_paid_admin", first_name=user.get("first_name",""), username=u_name, telegram_id=user["telegram_id"], plan_name=plan["name"], amount=order.get("amount",""), currency=order.get("currency",""))
+    for admin_id in await db.get_all_admin_ids(settings.ADMIN_ID):
+        try:
+            await bot.send_message(admin_id, admin_caption, parse_mode="Markdown")
+        except Exception as e:
+            logger.error("Failed to notify admin %s: %s", admin_id, e)
     qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
     if qr_bytes:
         import io

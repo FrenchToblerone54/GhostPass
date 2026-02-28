@@ -117,13 +117,15 @@ async def cmd_mystatus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         base = settings.GHOSTGATE_URL.rsplit("/", 1)[0] if "/" in settings.GHOSTGATE_URL else settings.GHOSTGATE_URL
         sub_url = f"{base}/sub/{sub_id}"
         data_str = t("adm_unlimited") if data_total_gb==0 else f"{data_total_gb} GB"
+        enabled = stats.get("enabled", True)
         text = (
             f"📦 *{order['plan_name']}*\n"
             f"📊 Data: {data_used_gb:.2f} GB / {data_str}\n"
             f"⏰ Expires: {expire_at}\n"
             f"🔗 Link: `{sub_url}`"
         )
-        kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_regen_link"), callback_data=f"sub:regen:{sub_id}")]])
+        toggle_btn = InlineKeyboardButton(t("btn_sub_disable") if enabled else t("btn_sub_enable"), callback_data=f"sub:toggle:{sub_id}")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_regen_link"), callback_data=f"sub:regen:{sub_id}"), toggle_btn]])
         await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
         shown += 1
     if shown==0:
@@ -156,6 +158,21 @@ async def cb_regen_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     await query.delete_message()
+
+async def cb_toggle_sub(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    sub_id = query.data.split(":", 2)[2]
+    sub = await gg.get_subscription(sub_id)
+    if not sub:
+        await query.edit_message_text(t("sub_toggle_fail"))
+        return
+    new_enabled = not sub.get("enabled", True)
+    ok = await gg.update_subscription(sub_id, enabled=new_enabled)
+    if not ok:
+        await query.edit_message_text(t("sub_toggle_fail"))
+        return
+    await query.edit_message_text(t("sub_disabled") if not new_enabled else t("sub_enabled"))
 
 async def cmd_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await ensure_force_join(update, ctx):
@@ -316,4 +333,5 @@ def get_handlers():
         CallbackQueryHandler(cb_regen_sub, pattern=r"^sub:regen:[^_]"),
         CallbackQueryHandler(cb_regen_confirm, pattern=r"^sub:regen_yes:"),
         CallbackQueryHandler(cb_regen_cancel, pattern=r"^sub:regen_no$"),
+        CallbackQueryHandler(cb_toggle_sub, pattern=r"^sub:toggle:"),
     ]
