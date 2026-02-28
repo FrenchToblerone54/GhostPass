@@ -92,6 +92,15 @@ async def price_for_gp_pair(plan_price, chain, token):
             return convert(plan_price, rate, decimals), token, decimals
     return None, token, _GP_DECIMALS.get(token, 2)
 
+async def price_for_manual_chain(plan_price, chain):
+    from core.db import get_setting
+    raw = await get_setting("manual_chain_rates", None)
+    rates = json.loads(raw) if raw else {}
+    rate = rates.get(chain, "")
+    if not rate:
+        return await price_for_method(plan_price, "manual")
+    return convert(plan_price, rate, 2), "USDT", 2
+
 async def price_for_code(plan_price, code):
     target = (code or "").upper()
     base = await get_base_currency()

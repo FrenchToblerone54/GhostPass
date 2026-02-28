@@ -40,7 +40,8 @@ from bot.states import (
     CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE,
     SETTINGS_TRIAL_DATA, SETTINGS_TRIAL_EXPIRE, SETTINGS_TRIAL_NODES,
     SETTINGS_USDT_TRC20, SETTINGS_USDT_BSC, SETTINGS_USDT_POLYGON,
-    SETTINGS_GP_PAIR_RATE
+    SETTINGS_GP_PAIR_RATE,
+    SETTINGS_USDT_TRC20_RATE, SETTINGS_USDT_BSC_RATE, SETTINGS_USDT_POL_RATE
 )
 from config import settings
 
@@ -1335,7 +1336,7 @@ async def cb_set_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     gp_enabled = await db.get_setting("ghostpayments_enabled", "0")=="1"
     gp_url = await db.get_setting("ghostpayments_url", settings.GHOSTPAYMENTS_URL or "(not set)")
     rows = [
-        [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:crypto_toggle")],
+        [InlineKeyboardButton(t("adm_toggle_btn", status=f"Cryptomus {t('adm_enabled') if enabled else t('adm_disabled')}"), callback_data="set:crypto_toggle")],
         [InlineKeyboardButton(t("adm_toggle_btn", status=f"GhostPayments {t('adm_enabled') if gp_enabled else t('adm_disabled')}"), callback_data="set:gp_toggle")],
         [InlineKeyboardButton(t("btn_edit_mid"), callback_data="set:crypto_mid")],
         [InlineKeyboardButton(t("btn_edit_api_key"), callback_data="set:crypto_key")],
@@ -1702,16 +1703,21 @@ async def settings_update_https_proxy(update: Update, ctx: ContextTypes.DEFAULT_
 async def cb_set_usdt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    manual_enabled = await db.get_setting("manual_enabled", "1")=="1"
     trc20 = await db.get_setting("usdt_trc20_address", settings.USDT_TRC20_ADDRESS or "-")
     bsc = await db.get_setting("usdt_bsc_address", settings.USDT_BSC_ADDRESS or "-")
     polygon = await db.get_setting("usdt_polygon_address", settings.USDT_POLYGON_ADDRESS or "-")
+    raw_rates = await db.get_setting("manual_chain_rates", None)
+    rates = json.loads(raw_rates) if raw_rates else {}
+    nr = t("adm_gp_pair_no_rate")
     rows = [
-        [InlineKeyboardButton("TRC20", callback_data="set:usdt_trc20")],
-        [InlineKeyboardButton("BSC", callback_data="set:usdt_bsc")],
-        [InlineKeyboardButton("POLYGON", callback_data="set:usdt_polygon")],
+        [InlineKeyboardButton(t("adm_toggle_btn", status=f"Manual {t('adm_enabled') if manual_enabled else t('adm_disabled')}"), callback_data="set:manual_toggle")],
+        [InlineKeyboardButton("TRC20 Address", callback_data="set:usdt_trc20"), InlineKeyboardButton(f"TRC20 Rate: {rates.get('TRC20', nr)}", callback_data="set:usdt_trc20_rate")],
+        [InlineKeyboardButton("BSC Address", callback_data="set:usdt_bsc"), InlineKeyboardButton(f"BSC Rate: {rates.get('BSC', nr)}", callback_data="set:usdt_bsc_rate")],
+        [InlineKeyboardButton("POLYGON Address", callback_data="set:usdt_polygon"), InlineKeyboardButton(f"POL Rate: {rates.get('POLYGON', nr)}", callback_data="set:usdt_pol_rate")],
         [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
     ]
-    await query.edit_message_text(t("adm_usdt_title", trc20=trc20, bsc=bsc, polygon=polygon), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    await query.edit_message_text(t("adm_usdt_title", status=t("adm_enabled") if manual_enabled else t("adm_disabled"), trc20=trc20, bsc=bsc, polygon=polygon), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_set_usdt_trc20(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _is_admin(update.effective_user.id):
@@ -1751,6 +1757,65 @@ async def settings_usdt_polygon(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await db.set_setting("usdt_polygon_address", update.message.text.strip())
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:usdt"))
     return ConversationHandler.END
+
+async def cb_manual_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    enabled = await db.get_setting("manual_enabled", "1")=="1"
+    await db.set_setting("manual_enabled", "0" if enabled else "1")
+    await cb_set_usdt(update, ctx)
+
+async def _save_manual_chain_rate(update, chain, err_state):
+    try:
+        exchange = Decimal(update.message.text.strip().replace(",", ""))
+        if exchange<=0:
+            raise ValueError
+        rate = str(Decimal("1")/exchange)
+    except Exception:
+        await update.message.reply_text(t("invalid_input"))
+        return err_state
+    raw = await db.get_setting("manual_chain_rates", None)
+    rates = json.loads(raw) if raw else {}
+    rates[chain] = rate
+    await db.set_setting("manual_chain_rates", json.dumps(rates))
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:usdt"))
+    return ConversationHandler.END
+
+async def cb_set_usdt_trc20_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    base = await get_base_currency()
+    await query.edit_message_text(t("adm_usdt_rate_prompt", chain="TRC20", base=base), reply_markup=cancel_kb())
+    return SETTINGS_USDT_TRC20_RATE
+
+async def settings_usdt_trc20_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    return await _save_manual_chain_rate(update, "TRC20", SETTINGS_USDT_TRC20_RATE)
+
+async def cb_set_usdt_bsc_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    base = await get_base_currency()
+    await query.edit_message_text(t("adm_usdt_rate_prompt", chain="BSC", base=base), reply_markup=cancel_kb())
+    return SETTINGS_USDT_BSC_RATE
+
+async def settings_usdt_bsc_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    return await _save_manual_chain_rate(update, "BSC", SETTINGS_USDT_BSC_RATE)
+
+async def cb_set_usdt_pol_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    base = await get_base_currency()
+    await query.edit_message_text(t("adm_usdt_rate_prompt", chain="POLYGON", base=base), reply_markup=cancel_kb())
+    return SETTINGS_USDT_POL_RATE
+
+async def settings_usdt_pol_rate(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    return await _save_manual_chain_rate(update, "POLYGON", SETTINGS_USDT_POL_RATE)
 
 async def cb_set_currencies(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2124,6 +2189,9 @@ def get_main_conv_handler():
         SETTINGS_USDT_TRC20: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_trc20)],
         SETTINGS_USDT_BSC: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_bsc)],
         SETTINGS_USDT_POLYGON: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_polygon)],
+        SETTINGS_USDT_TRC20_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_trc20_rate)],
+        SETTINGS_USDT_BSC_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_bsc_rate)],
+        SETTINGS_USDT_POL_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_usdt_pol_rate)],
         USER_SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, users_search)],
         SUB_SEARCH: [MessageHandler(filters.TEXT & ~filters.COMMAND, subs_search)],
         ADMIN_REJECT_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reject_reason), CallbackQueryHandler(cb_reject_skip, pattern=r"^reject:skip$")],
@@ -2173,6 +2241,9 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_usdt_trc20, pattern=r"^set:usdt_trc20$"),
         CallbackQueryHandler(cb_set_usdt_bsc, pattern=r"^set:usdt_bsc$"),
         CallbackQueryHandler(cb_set_usdt_polygon, pattern=r"^set:usdt_polygon$"),
+        CallbackQueryHandler(cb_set_usdt_trc20_rate, pattern=r"^set:usdt_trc20_rate$"),
+        CallbackQueryHandler(cb_set_usdt_bsc_rate, pattern=r"^set:usdt_bsc_rate$"),
+        CallbackQueryHandler(cb_set_usdt_pol_rate, pattern=r"^set:usdt_pol_rate$"),
         CallbackQueryHandler(cb_curr_add, pattern=r"^curr:add$"),
         CallbackQueryHandler(cb_set_trial_data, pattern=r"^set:trial_data$"),
         CallbackQueryHandler(cb_set_trial_expire, pattern=r"^set:trial_expire$"),
@@ -2221,6 +2292,7 @@ def get_handlers():
         CallbackQueryHandler(cb_set_requests, pattern=r"^set:requests$"),
         CallbackQueryHandler(cb_req_toggle, pattern=r"^set:req_toggle$"),
         CallbackQueryHandler(cb_set_usdt, pattern=r"^set:usdt$"),
+        CallbackQueryHandler(cb_manual_toggle, pattern=r"^set:manual_toggle$"),
         CallbackQueryHandler(cb_set_currencies, pattern=r"^set:currencies$"),
         CallbackQueryHandler(cb_curr_detail, pattern=r"^curr:detail:"),
         CallbackQueryHandler(cb_curr_delete, pattern=r"^curr:delete:"),

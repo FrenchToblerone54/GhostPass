@@ -1,9 +1,8 @@
 import logging
-from decimal import Decimal
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, ConversationHandler, filters
 import core.db as db
-from core.currency import price_for_method, fmt
+from core.currency import fmt, price_for_manual_chain
 from bot.strings import t
 from bot.keyboards import confirm_reject_kb, cancel_kb
 from bot.states import USDT_MANUAL_TX
@@ -34,20 +33,16 @@ async def cb_buy_manual(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not available:
         await query.edit_message_text(t("manual_no_address"))
         return ConversationHandler.END
-    amount, code, decimals=await price_for_method(plan["price"], "manual")
-    u=update.effective_user
-    uid=await db.upsert_user(u.id, u.username or "", u.first_name or "")
-    order_id=await db.create_order(uid, plan_id, "manual", float(amount), code)
-    amount_str=f"{fmt(Decimal(str(amount)), decimals, code)} {code}"
-    ctx.user_data["manual_order_id"]=order_id
-    ctx.user_data["manual_amount_str"]=amount_str
+    ctx.user_data["manual_plan_id"]=plan_id
     ctx.user_data["manual_plan_name"]=plan["name"]
+    ctx.user_data["manual_plan_price"]=plan["price"]
     rows=[]
     for chain in ("TRC20", "BSC", "POLYGON"):
         if available.get(chain):
-            rows.append([InlineKeyboardButton(chain, callback_data=f"manual:chain:{chain}")])
+            amount, code, decimals=await price_for_manual_chain(plan["price"], chain)
+            rows.append([InlineKeyboardButton(f"{chain} — {fmt(amount, decimals, code)} {code}", callback_data=f"manual:chain:{chain}")])
     rows.append([InlineKeyboardButton(t("btn_cancel"), callback_data="cancel")])
-    await query.edit_message_text(t("manual_chain_prompt", amount=amount_str), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    await query.edit_message_text(t("manual_chain_prompt"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
     return USDT_MANUAL_TX
 
 async def cb_select_chain(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -59,10 +54,21 @@ async def cb_select_chain(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not address:
         await query.edit_message_text(t("manual_no_address"))
         return ConversationHandler.END
+    plan_id=ctx.user_data.get("manual_plan_id")
+    plan_price=ctx.user_data.get("manual_plan_price")
+    if not plan_id or plan_price is None:
+        return ConversationHandler.END
+    amount, code, decimals=await price_for_manual_chain(plan_price, chain)
+    u=update.effective_user
+    uid=await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    order_id=await db.create_order(uid, plan_id, "manual", float(amount), code)
+    amount_str=f"{fmt(amount, decimals, code)} {code}"
+    ctx.user_data["manual_order_id"]=order_id
+    ctx.user_data["manual_amount_str"]=amount_str
     ctx.user_data["manual_chain"]=chain
     ctx.user_data["manual_address"]=address
     await query.edit_message_text(
-        t("manual_send_proof", chain=chain, amount=ctx.user_data.get("manual_amount_str", "-"), address=address),
+        t("manual_send_proof", chain=chain, amount=amount_str, address=address),
         reply_markup=cancel_kb(),
         parse_mode="Markdown"
     )
@@ -105,7 +111,7 @@ async def cb_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query=update.callback_query
     await query.answer()
     order_id=ctx.user_data.pop("manual_order_id", None)
-    for k in ("manual_chain", "manual_address", "manual_amount_str", "manual_plan_name"):
+    for k in ("manual_chain", "manual_address", "manual_amount_str", "manual_plan_name", "manual_plan_id", "manual_plan_price"):
         ctx.user_data.pop(k, None)
     if order_id:
         await db.update_order(order_id, status="cancelled")
