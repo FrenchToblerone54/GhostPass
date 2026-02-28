@@ -939,7 +939,7 @@ async def manual_sub_ip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return ADMIN_MANUAL_SUB_IP
     ctx.user_data["msub_nodes"] = []
     nodes = await gg.list_nodes()
-    kb = node_select_kb(nodes, [], "msub:nodes_done", "cancel")
+    kb = node_select_kb(nodes, [], "msub:nodes_done", "cancel", "msub:nodes_all", "msub:nodes_none")
     await update.message.reply_text(t("adm_sub_nodes_prompt"), reply_markup=kb)
     return ADMIN_MANUAL_SUB_NODES
 
@@ -954,8 +954,24 @@ async def manual_sub_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         selected.append(node_id)
     ctx.user_data["msub_nodes"] = selected
     nodes = await gg.list_nodes()
-    kb = node_select_kb(nodes, selected, "msub:nodes_done", "cancel")
+    kb = node_select_kb(nodes, selected, "msub:nodes_done", "cancel", "msub:nodes_all", "msub:nodes_none")
     await query.edit_message_reply_markup(reply_markup=kb)
+    return ADMIN_MANUAL_SUB_NODES
+
+async def manual_sub_nodes_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    nodes = await gg.list_nodes()
+    ctx.user_data["msub_nodes"] = _all_node_ids(nodes)
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, ctx.user_data["msub_nodes"], "msub:nodes_done", "cancel", "msub:nodes_all", "msub:nodes_none"))
+    return ADMIN_MANUAL_SUB_NODES
+
+async def manual_sub_nodes_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    nodes = await gg.list_nodes()
+    ctx.user_data["msub_nodes"] = []
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, [], "msub:nodes_done", "cancel", "msub:nodes_all", "msub:nodes_none"))
     return ADMIN_MANUAL_SUB_NODES
 
 async def manual_sub_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2080,7 +2096,7 @@ async def cb_set_trial_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     nodes = await gg.list_nodes()
     stored = json.loads(await db.get_setting("trial_node_ids", "[]"))
     ctx.user_data["trial_nodes"]=list(stored)
-    await query.edit_message_text(t("adm_trial_nodes_prompt"), reply_markup=node_select_kb(nodes, stored, "trial:nodes_done", "cancel"))
+    await query.edit_message_text(t("adm_trial_nodes_prompt"), reply_markup=node_select_kb(nodes, stored, "trial:nodes_done", "cancel", "trial:nodes_all", "trial:nodes_none"))
     return SETTINGS_TRIAL_NODES
 
 async def trial_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2094,7 +2110,23 @@ async def trial_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         selected.append(nid)
     ctx.user_data["trial_nodes"]=selected
     nodes = await gg.list_nodes()
-    await query.edit_message_text(t("adm_trial_nodes_prompt"), reply_markup=node_select_kb(nodes, selected, "trial:nodes_done", "cancel"))
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, selected, "trial:nodes_done", "cancel", "trial:nodes_all", "trial:nodes_none"))
+    return SETTINGS_TRIAL_NODES
+
+async def trial_nodes_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    nodes = await gg.list_nodes()
+    ctx.user_data["trial_nodes"]=_all_node_ids(nodes)
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, ctx.user_data["trial_nodes"], "trial:nodes_done", "cancel", "trial:nodes_all", "trial:nodes_none"))
+    return SETTINGS_TRIAL_NODES
+
+async def trial_nodes_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    nodes = await gg.list_nodes()
+    ctx.user_data["trial_nodes"]=[]
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, [], "trial:nodes_done", "cancel", "trial:nodes_all", "trial:nodes_none"))
     return SETTINGS_TRIAL_NODES
 
 async def trial_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2171,7 +2203,7 @@ def get_main_conv_handler():
         ADMIN_MANUAL_SUB_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_data)],
         ADMIN_MANUAL_SUB_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_days)],
         ADMIN_MANUAL_SUB_IP: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_ip)],
-        ADMIN_MANUAL_SUB_NODES: [CallbackQueryHandler(manual_sub_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(manual_sub_done, pattern=r"^msub:nodes_done$")],
+        ADMIN_MANUAL_SUB_NODES: [CallbackQueryHandler(manual_sub_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(manual_sub_nodes_all, pattern=r"^msub:nodes_all$"), CallbackQueryHandler(manual_sub_nodes_none, pattern=r"^msub:nodes_none$"), CallbackQueryHandler(manual_sub_done, pattern=r"^msub:nodes_done$")],
         SETTINGS_GG_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_gg_url)],
         SETTINGS_CARD_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_card_num)],
         SETTINGS_CARD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_card_name)],
@@ -2203,7 +2235,7 @@ def get_main_conv_handler():
         CURR_EDIT_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, curr_edit_rate_save)],
         SETTINGS_TRIAL_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_data)],
         SETTINGS_TRIAL_EXPIRE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_expire)],
-        SETTINGS_TRIAL_NODES: [CallbackQueryHandler(trial_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(trial_nodes_done, pattern=r"^trial:nodes_done$")],
+        SETTINGS_TRIAL_NODES: [CallbackQueryHandler(trial_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(trial_nodes_all, pattern=r"^trial:nodes_all$"), CallbackQueryHandler(trial_nodes_none, pattern=r"^trial:nodes_none$"), CallbackQueryHandler(trial_nodes_done, pattern=r"^trial:nodes_done$")],
         SETTINGS_GP_PAIR_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, gp_pair_rate_save)],
     }
     entry_points = [
