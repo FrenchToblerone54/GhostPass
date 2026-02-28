@@ -848,7 +848,7 @@ async def cb_adm_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     per_page = 10
     start = page*per_page
     page_subs = subs[start:start+per_page]
-    rows = [[InlineKeyboardButton(s.get("comment") or s["id"][:8], callback_data=f"sub:detail:{s['id']}")] for s in page_subs]
+    rows = [[InlineKeyboardButton(s.get("comment") or s["id"][:8], callback_data=f"adm:sub:detail:{s['id']}")] for s in page_subs]
     nav = []
     if page>0:
         nav.append(InlineKeyboardButton("◀️", callback_data="subs_page:prev"))
@@ -863,7 +863,7 @@ async def cb_adm_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_sub_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    sub_id = query.data.split(":", 2)[2]
+    sub_id = query.data.split(":", 3)[3]
     sub = await gg.get_subscription(sub_id)
     if not sub:
         await query.edit_message_text(t("sub_removed"))
@@ -880,6 +880,10 @@ async def cb_sub_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         status=t("adm_active") if sub.get("enabled", 1) else t("adm_disabled")
     )
     await query.edit_message_text(text, reply_markup=sub_actions_kb(sub_id, "adm:subs"), parse_mode="Markdown")
+    base = settings.GHOSTGATE_URL.rsplit("/", 1)[0] if "/" in settings.GHOSTGATE_URL else settings.GHOSTGATE_URL
+    qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
+    if qr_bytes:
+        await query.message.reply_photo(photo=io.BytesIO(qr_bytes), caption=f"🔗 `{base}/sub/{sub_id}`", parse_mode="Markdown")
 
 async def cb_sub_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -896,7 +900,7 @@ async def cb_sub_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_sub_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    sub_id = query.data.split(":", 2)[2]
+    sub_id = query.data.split(":", 3)[3]
     await gg.delete_subscription(sub_id)
     await query.edit_message_text(t("sub_deleted"), reply_markup=back_kb("adm:subs"))
 
@@ -992,6 +996,9 @@ async def manual_sub_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sub_id = result.get("id")
     sub_url = result.get("url", "")
     await query.edit_message_text(t("sub_created_admin", sub_id=sub_id, url=sub_url), reply_markup=back_kb("adm:subs"), parse_mode="Markdown")
+    qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
+    if qr_bytes:
+        await query.message.reply_photo(photo=io.BytesIO(qr_bytes), caption=f"🔗 `{sub_url}`", parse_mode="Markdown")
     return ConversationHandler.END
 
 async def cb_subs_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2018,7 +2025,7 @@ async def subs_search(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not results:
         await update.message.reply_text(t("adm_no_subs_found"), reply_markup=back_kb("adm:subs"))
         return ConversationHandler.END
-    rows = [[InlineKeyboardButton(s.get("comment") or s["id"][:12], callback_data=f"sub:detail:{s['id']}")] for s in results[:20]]
+    rows = [[InlineKeyboardButton(s.get("comment") or s["id"][:12], callback_data=f"adm:sub:detail:{s['id']}")] for s in results[:20]]
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:subs")])
     await update.message.reply_text(t("adm_search_results"), reply_markup=InlineKeyboardMarkup(rows))
     return ConversationHandler.END
@@ -2295,9 +2302,9 @@ def get_handlers():
         CallbackQueryHandler(cb_plan_toggle, pattern=r"^plan:toggle:"),
         CallbackQueryHandler(cb_plan_delete, pattern=r"^plan:delete:"),
         CallbackQueryHandler(cb_adm_subs, pattern=r"^adm:subs$"),
-        CallbackQueryHandler(cb_sub_detail, pattern=r"^sub:detail:"),
+        CallbackQueryHandler(cb_sub_detail, pattern=r"^adm:sub:detail:"),
         CallbackQueryHandler(cb_sub_stats, pattern=r"^sub:stats:"),
-        CallbackQueryHandler(cb_sub_delete, pattern=r"^sub:delete:"),
+        CallbackQueryHandler(cb_sub_delete, pattern=r"^adm:sub:delete:"),
         CallbackQueryHandler(cb_subs_page, pattern=r"^subs_page:"),
         CallbackQueryHandler(cb_adm_users, pattern=r"^adm:users$"),
         CallbackQueryHandler(cb_user_detail, pattern=r"^user:detail:"),

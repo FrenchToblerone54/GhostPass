@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -108,7 +109,7 @@ async def _show_subs_list(update, ctx, uid=None):
     else:
         await update.callback_query.edit_message_text(t("subs_list_header"), reply_markup=subs_list_kb(subs), parse_mode="Markdown")
 
-async def _show_sub_detail(query, sub_id):
+async def _show_sub_detail(query, sub_id, send_qr=False):
     uid = await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
     orders = await db.get_user_paid_orders(uid)
     trial = await db.get_user_trial_claim(uid)
@@ -140,6 +141,10 @@ async def _show_sub_detail(query, sub_id):
         f"🔗 Link: `{sub_url}`"
     )
     await query.edit_message_text(text, reply_markup=sub_detail_kb(sub_id, enabled), parse_mode="Markdown")
+    if send_qr:
+        qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
+        if qr_bytes:
+            await query.message.reply_photo(photo=io.BytesIO(qr_bytes), caption=f"🔗 `{sub_url}`", parse_mode="Markdown")
 
 async def cmd_mystatus(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = await _ensure_user(update)
@@ -197,7 +202,7 @@ async def cb_sub_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     sub_id = query.data.split(":", 2)[2]
-    await _show_sub_detail(query, sub_id)
+    await _show_sub_detail(query, sub_id, send_qr=True)
 
 async def cb_sub_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
