@@ -89,13 +89,15 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     expire_after_first_use_seconds=None
     if int(plan["days"])>0 and await db.get_setting("plan_start_after_use", "0")=="1":
         expire_after_first_use_seconds=int(plan["days"])*86400
+    paid_note=await db.get_setting("paid_note", "") or None
     result = await gg.create_subscription(
         comment=user.get("first_name") or str(user["telegram_id"]),
         data_gb=plan["data_gb"],
         days=3650 if expire_after_first_use_seconds else plan["days"],
         ip_limit=plan["ip_limit"],
         node_ids=plan["node_ids"],
-        expire_after_first_use_seconds=expire_after_first_use_seconds
+        expire_after_first_use_seconds=expire_after_first_use_seconds,
+        note=paid_note
     )
     if not result:
         await query.edit_message_text(t("ghostgate_error"))

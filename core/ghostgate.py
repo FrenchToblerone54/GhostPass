@@ -81,10 +81,12 @@ async def get_subscription(sub_id):
     r = await _get(f"subscriptions/{sub_id}")
     return r.json() if r else None
 
-async def create_subscription(comment, data_gb, days, ip_limit, node_ids, expire_after_first_use_seconds=None):
+async def create_subscription(comment, data_gb, days, ip_limit, node_ids, expire_after_first_use_seconds=None, note=None):
     body = {"comment": comment, "data_gb": data_gb, "days": days, "ip_limit": ip_limit, "node_ids": node_ids}
     if expire_after_first_use_seconds is not None:
         body["expire_after_first_use_seconds"] = expire_after_first_use_seconds
+    if note:
+        body["note"] = note
     r = await _post("subscriptions", json=body)
     return r.json() if r else None
 

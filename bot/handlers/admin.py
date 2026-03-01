@@ -20,7 +20,7 @@ from bot.keyboards import (
     main_admin_kb, settings_kb, back_kb, plan_actions_kb,
     user_actions_kb, sub_actions_kb, node_select_kb,
     order_detail_kb, skip_kb, cancel_kb, currencies_kb,
-    method_select_kb, curr_detail_kb, base_select_kb
+    method_select_kb, curr_detail_kb, base_select_kb, subs_bulk_note_kb
 )
 from bot.strings import t
 from bot.states import (
@@ -31,7 +31,7 @@ from bot.states import (
     PLAN_EDIT_VALUE, PLAN_EDIT_NODES, PLAN_BULK_NODES, PLAN_BULK_CREATE_NODES, PLAN_BULK_CREATE_MATRIX, PLAN_BULK_DELETE, PLAN_BULK_NODES_PLANS,
     ADMIN_ADD_ID, ADMIN_ADD_PERMS,
     ADMIN_MANUAL_SUB_COMMENT, ADMIN_MANUAL_SUB_DATA, ADMIN_MANUAL_SUB_DAYS,
-    ADMIN_MANUAL_SUB_IP, ADMIN_MANUAL_SUB_NODES,
+    ADMIN_MANUAL_SUB_IP, ADMIN_MANUAL_SUB_NODES, ADMIN_MANUAL_SUB_NOTE,
     SETTINGS_CARD_NUM, SETTINGS_CARD_NAME,
     SETTINGS_CRYPTO_MID, SETTINGS_CRYPTO_KEY,
     SETTINGS_SUPPORT, SETTINGS_SYNC, SETTINGS_GG_URL, SETTINGS_UPDATE_HTTP_PROXY, SETTINGS_UPDATE_HTTPS_PROXY, SETTINGS_FORCE_JOIN_CHANNEL, SETTINGS_GHOSTPAY_URL, SETTINGS_GHOSTPAY_KEY, SETTINGS_PLAN_PAGE_SIZE_CONSUMER, SETTINGS_PLAN_PAGE_SIZE_ADMIN,
@@ -39,9 +39,11 @@ from bot.states import (
     ADMIN_REJECT_REASON,
     CURR_ADD_CODE, CURR_ADD_NAME, CURR_ADD_DECIMALS, CURR_ADD_METHODS, CURR_ADD_RATE, CURR_EDIT_RATE,
     SETTINGS_TRIAL_DATA, SETTINGS_TRIAL_EXPIRE, SETTINGS_TRIAL_NODES,
+    SETTINGS_TRIAL_NOTE, SETTINGS_PAID_NOTE,
     SETTINGS_USDT_TRC20, SETTINGS_USDT_BSC, SETTINGS_USDT_POLYGON,
     SETTINGS_GP_PAIR_RATE,
-    SETTINGS_USDT_TRC20_RATE, SETTINGS_USDT_BSC_RATE, SETTINGS_USDT_POL_RATE
+    SETTINGS_USDT_TRC20_RATE, SETTINGS_USDT_BSC_RATE, SETTINGS_USDT_POL_RATE,
+    ADMIN_SUB_BULK_NOTE_SELECT, ADMIN_SUB_BULK_NOTE_INPUT
 )
 from config import settings
 
@@ -857,6 +859,7 @@ async def cb_adm_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if nav:
         rows.append(nav)
     rows.append([InlineKeyboardButton(t("adm_search_btn"), callback_data="subs:search"), InlineKeyboardButton(t("adm_create_btn"), callback_data="sub:create")])
+    rows.append([InlineKeyboardButton(t("btn_subs_bulk_note"), callback_data="subs:bulk_note")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     await query.edit_message_text(f"📋 *Subscriptions* ({total} total)\nPage {page+1}", reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
@@ -981,6 +984,35 @@ async def manual_sub_nodes_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def manual_sub_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    await query.edit_message_text(t("adm_sub_note_prompt"), reply_markup=skip_kb("msub:note_skip"))
+    return ADMIN_MANUAL_SUB_NOTE
+
+async def manual_sub_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["msub_note"] = update.message.text.strip()
+    result = await gg.create_subscription(
+        comment=ctx.user_data.get("msub_comment", ""),
+        data_gb=ctx.user_data.get("msub_data", 0),
+        days=ctx.user_data.get("msub_days", 0),
+        ip_limit=ctx.user_data.get("msub_ip", 0),
+        node_ids=ctx.user_data.get("msub_nodes", []),
+        note=ctx.user_data.get("msub_note") or None
+    )
+    for k in ("msub_comment", "msub_data", "msub_days", "msub_ip", "msub_nodes", "msub_note"):
+        ctx.user_data.pop(k, None)
+    if not result:
+        await update.message.reply_text(t("ghostgate_error"))
+        return ConversationHandler.END
+    sub_id = result.get("id")
+    sub_url = result.get("url", "")
+    await update.message.reply_text(t("sub_created_admin", sub_id=sub_id, url=sub_url), reply_markup=back_kb("adm:subs"), parse_mode="Markdown")
+    qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
+    if qr_bytes:
+        await update.message.reply_photo(photo=io.BytesIO(qr_bytes), caption=f"🔗 `{sub_url}`", parse_mode="Markdown")
+    return ConversationHandler.END
+
+async def manual_sub_note_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     result = await gg.create_subscription(
         comment=ctx.user_data.get("msub_comment", ""),
         data_gb=ctx.user_data.get("msub_data", 0),
@@ -988,7 +1020,7 @@ async def manual_sub_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ip_limit=ctx.user_data.get("msub_ip", 0),
         node_ids=ctx.user_data.get("msub_nodes", [])
     )
-    for k in ("msub_comment", "msub_data", "msub_days", "msub_ip", "msub_nodes"):
+    for k in ("msub_comment", "msub_data", "msub_days", "msub_ip", "msub_nodes", "msub_note"):
         ctx.user_data.pop(k, None)
     if not result:
         await query.edit_message_text(t("ghostgate_error"))
@@ -1151,13 +1183,15 @@ async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     expire_after_first_use_seconds=None
     if int(plan["days"])>0 and await db.get_setting("plan_start_after_use", "0")=="1":
         expire_after_first_use_seconds=int(plan["days"])*86400
+    paid_note=await db.get_setting("paid_note", "") or None
     result = await gg.create_subscription(
         comment=user.get("first_name") or str(user["telegram_id"]),
         data_gb=plan["data_gb"],
         days=3650 if expire_after_first_use_seconds else plan["days"],
         ip_limit=plan["ip_limit"],
         node_ids=plan["node_ids"],
-        expire_after_first_use_seconds=expire_after_first_use_seconds
+        expire_after_first_use_seconds=expire_after_first_use_seconds,
+        note=paid_note
     )
     if not result:
         await query.edit_message_text(t("ghostgate_error"))
@@ -2047,6 +2081,7 @@ async def cb_set_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton(t("adm_trial_set_data"), callback_data="set:trial_data")],
             [InlineKeyboardButton(t("adm_trial_set_expire"), callback_data="set:trial_expire")],
             [InlineKeyboardButton(t("adm_trial_set_nodes"), callback_data="set:trial_nodes")],
+            [InlineKeyboardButton(t("adm_trial_set_note"), callback_data="set:trial_note")],
             [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
         ]),
         parse_mode="Markdown"
@@ -2144,15 +2179,129 @@ async def trial_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
     return ConversationHandler.END
 
+async def cb_set_trial_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    current = await db.get_setting("trial_note", "") or "-"
+    await query.edit_message_text(t("trial_note_prompt", current=current), reply_markup=cancel_kb())
+    return SETTINGS_TRIAL_NOTE
+
+async def settings_trial_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    await db.set_setting("trial_note", "" if val=="-" else val)
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
+    return ConversationHandler.END
+
+async def cb_set_paid_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    current = await db.get_setting("paid_note", "") or "-"
+    await query.edit_message_text(t("paid_note_prompt", current=current), reply_markup=cancel_kb())
+    return SETTINGS_PAID_NOTE
+
+async def settings_paid_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    await db.set_setting("paid_note", "" if val=="-" else val)
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
+    return ConversationHandler.END
+
+async def _show_snote_page(query, ctx):
+    per_page = 10
+    subs = ctx.user_data.get("snote_subs", [])
+    selected = ctx.user_data.get("snote_selected", [])
+    page = int(ctx.user_data.get("snote_page", 0))
+    total = len(subs)
+    max_page = max((total-1)//per_page, 0) if total>0 else 0
+    page = max(0, min(page, max_page))
+    ctx.user_data["snote_page"] = page
+    start = page*per_page
+    page_subs = subs[start:start+per_page]
+    title = t("subs_bulk_note_title")
+    if total>per_page:
+        title += f"\n{t('plans_page_info', page=page+1, pages=max_page+1)}"
+    await query.edit_message_text(title, reply_markup=subs_bulk_note_kb(page_subs, selected, page, total, per_page), parse_mode="Markdown")
+
+async def cb_sub_bulk_note_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    subs = await gg.list_subscriptions(per_page=0)
+    ctx.user_data["snote_subs"] = subs
+    ctx.user_data["snote_selected"] = []
+    ctx.user_data["snote_page"] = 0
+    await _show_snote_page(query, ctx)
+    return ADMIN_SUB_BULK_NOTE_SELECT
+
+async def sub_bulk_note_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    sub_id = query.data.split(":", 1)[1]
+    selected = ctx.user_data.get("snote_selected", [])
+    if sub_id in selected:
+        selected.remove(sub_id)
+    else:
+        selected.append(sub_id)
+    ctx.user_data["snote_selected"] = selected
+    await _show_snote_page(query, ctx)
+    return ADMIN_SUB_BULK_NOTE_SELECT
+
+async def sub_bulk_note_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    ctx.user_data["snote_selected"] = [s["id"] for s in ctx.user_data.get("snote_subs", [])]
+    await _show_snote_page(query, ctx)
+    return ADMIN_SUB_BULK_NOTE_SELECT
+
+async def sub_bulk_note_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    ctx.user_data["snote_selected"] = []
+    await _show_snote_page(query, ctx)
+    return ADMIN_SUB_BULK_NOTE_SELECT
+
+async def sub_bulk_note_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    direction = query.data.split(":", 1)[1]
+    page = int(ctx.user_data.get("snote_page", 0))
+    ctx.user_data["snote_page"] = page-1 if direction=="prev" else page+1
+    await _show_snote_page(query, ctx)
+    return ADMIN_SUB_BULK_NOTE_SELECT
+
+async def sub_bulk_note_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    selected = ctx.user_data.get("snote_selected", [])
+    if not selected:
+        await query.answer(t("adm_cancelled"), show_alert=True)
+        return ADMIN_SUB_BULK_NOTE_SELECT
+    await query.edit_message_text(t("subs_bulk_note_input"), reply_markup=cancel_kb())
+    return ADMIN_SUB_BULK_NOTE_INPUT
+
+async def sub_bulk_note_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    note = update.message.text.strip()
+    selected = ctx.user_data.pop("snote_selected", [])
+    ctx.user_data.pop("snote_subs", None)
+    ctx.user_data.pop("snote_page", None)
+    count = 0
+    for sub_id in selected:
+        result = await gg.update_subscription(sub_id, note=note)
+        if result is not None:
+            count += 1
+    await update.message.reply_text(t("subs_bulk_note_done", count=count), reply_markup=back_kb("adm:subs"))
+    return ConversationHandler.END
+
 async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     for k in ("plan_name", "plan_data", "plan_days", "plan_ip", "plan_price", "plan_nodes",
               "bulk_create_nodes",
-              "msub_comment", "msub_data", "msub_days", "msub_ip", "msub_nodes",
+              "msub_comment", "msub_data", "msub_days", "msub_ip", "msub_nodes", "msub_note",
               "new_admin_id", "editing_plan_id", "editing_plan_field", "editing_plan_nodes_id", "editing_plan_nodes", "bulk_plan_nodes", "bulk_node_plan_ids", "bulk_delete_plan_ids",
               "new_curr_code", "new_curr_name", "new_curr_decimals", "new_curr_methods", "editing_curr_code",
-              "rejecting_order_id", "pending_order_id", "request_order_id", "trial_nodes"):
+              "rejecting_order_id", "pending_order_id", "request_order_id", "trial_nodes",
+              "snote_subs", "snote_selected", "snote_page"):
         ctx.user_data.pop(k, None)
     await query.edit_message_text(t("adm_cancelled"), reply_markup=back_kb("adm:back"))
     return ConversationHandler.END
@@ -2211,6 +2360,7 @@ def get_main_conv_handler():
         ADMIN_MANUAL_SUB_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_days)],
         ADMIN_MANUAL_SUB_IP: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_ip)],
         ADMIN_MANUAL_SUB_NODES: [CallbackQueryHandler(manual_sub_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(manual_sub_nodes_all, pattern=r"^msub:nodes_all$"), CallbackQueryHandler(manual_sub_nodes_none, pattern=r"^msub:nodes_none$"), CallbackQueryHandler(manual_sub_done, pattern=r"^msub:nodes_done$")],
+        ADMIN_MANUAL_SUB_NOTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, manual_sub_note), CallbackQueryHandler(manual_sub_note_skip, pattern=r"^msub:note_skip$")],
         SETTINGS_GG_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_gg_url)],
         SETTINGS_CARD_NUM: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_card_num)],
         SETTINGS_CARD_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_card_name)],
@@ -2243,6 +2393,16 @@ def get_main_conv_handler():
         SETTINGS_TRIAL_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_data)],
         SETTINGS_TRIAL_EXPIRE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_expire)],
         SETTINGS_TRIAL_NODES: [CallbackQueryHandler(trial_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(trial_nodes_all, pattern=r"^trial:nodes_all$"), CallbackQueryHandler(trial_nodes_none, pattern=r"^trial:nodes_none$"), CallbackQueryHandler(trial_nodes_done, pattern=r"^trial:nodes_done$")],
+        SETTINGS_TRIAL_NOTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_note)],
+        SETTINGS_PAID_NOTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_paid_note)],
+        ADMIN_SUB_BULK_NOTE_SELECT: [
+            CallbackQueryHandler(sub_bulk_note_toggle, pattern=r"^snote_toggle:"),
+            CallbackQueryHandler(sub_bulk_note_all, pattern=r"^snote:all$"),
+            CallbackQueryHandler(sub_bulk_note_none, pattern=r"^snote:none$"),
+            CallbackQueryHandler(sub_bulk_note_page, pattern=r"^snote_page:"),
+            CallbackQueryHandler(sub_bulk_note_prompt, pattern=r"^snote:done$"),
+        ],
+        ADMIN_SUB_BULK_NOTE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sub_bulk_note_save)],
         SETTINGS_GP_PAIR_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, gp_pair_rate_save)],
     }
     entry_points = [
@@ -2287,6 +2447,9 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_trial_data, pattern=r"^set:trial_data$"),
         CallbackQueryHandler(cb_set_trial_expire, pattern=r"^set:trial_expire$"),
         CallbackQueryHandler(cb_set_trial_nodes, pattern=r"^set:trial_nodes$"),
+        CallbackQueryHandler(cb_set_trial_note, pattern=r"^set:trial_note$"),
+        CallbackQueryHandler(cb_set_paid_note, pattern=r"^set:paid_note$"),
+        CallbackQueryHandler(cb_sub_bulk_note_start, pattern=r"^subs:bulk_note$"),
         CallbackQueryHandler(cb_curr_edit_rate, pattern=r"^curr:edit_rate:"),
         CallbackQueryHandler(cb_reject_order, pattern=r"^order:reject:"),
     ]

@@ -69,6 +69,7 @@ def settings_kb():
         [InlineKeyboardButton(t("btn_set_currencies"), callback_data="set:currencies")],
         [InlineKeyboardButton(t("btn_set_usdt"), callback_data="set:usdt")],
         [InlineKeyboardButton(t("btn_set_trial"), callback_data="set:trial")],
+        [InlineKeyboardButton(t("btn_set_paid_note"), callback_data="set:paid_note")],
         [InlineKeyboardButton(t("btn_set_sync"), callback_data="set:sync")],
         [InlineKeyboardButton(t("btn_set_plans_pagination"), callback_data="set:plan_pagination")],
         [InlineKeyboardButton(t("btn_set_force_join"), callback_data="set:force_join")],
@@ -172,4 +173,21 @@ def curr_detail_kb(code, is_base, back_cb):
 def base_select_kb(currencies, back_cb):
     rows = [[InlineKeyboardButton(f"{c['code']} — {c['name']}", callback_data=f"curr:make_base:{c['code']}")] for c in currencies]
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data=back_cb)])
+    return InlineKeyboardMarkup(rows)
+
+def subs_bulk_note_kb(page_subs, selected_ids, page, total, per_page):
+    rows = []
+    for s in page_subs:
+        label = s.get("comment") or s["id"][:8]
+        check = "✅" if s["id"] in selected_ids else "⬜"
+        rows.append([InlineKeyboardButton(f"{check} {label}", callback_data=f"snote_toggle:{s['id']}")])
+    rows.append([InlineKeyboardButton(t("btn_select_all"), callback_data="snote:all"), InlineKeyboardButton(t("btn_unselect_all"), callback_data="snote:none")])
+    nav = []
+    if page>0:
+        nav.append(InlineKeyboardButton("◀️", callback_data="snote_page:prev"))
+    if (page+1)*per_page<total:
+        nav.append(InlineKeyboardButton("▶️", callback_data="snote_page:next"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(t("btn_done"), callback_data="snote:done"), InlineKeyboardButton(t("btn_cancel"), callback_data="cancel")])
     return InlineKeyboardMarkup(rows)
