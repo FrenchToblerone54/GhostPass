@@ -44,8 +44,9 @@ Admins access the full management interface by sending `/start`. The menu is ent
 ### Subscriptions
 - Browse all subscriptions live from GhostGate (paginated, searchable)
 - View stats and QR code for any subscription
-- Manually create subscriptions with custom parameters and node selection
+- Manually create subscriptions with custom parameters, node selection, and an optional note
 - Delete subscriptions
+- **Bulk note setter** — select any number of existing subscriptions (paginated, with Select All / Deselect All) and apply a note to all of them at once
 
 ### Plans
 - Create, edit, delete plans
@@ -75,6 +76,8 @@ Admins access the full management interface by sending `/start`. The menu is ent
 - **Support Contact** — update support @username
 - **Currencies** — add, edit, or remove currencies; set exchange rates and accepted payment methods per currency; set base currency
 - **Sync Interval** — update background sync interval
+- **Trial Subscription** — configure the free trial (toggle, data, expiry, nodes, note)
+- **Paid Sub Note** — set a default note automatically attached to every new paid subscription
 
 ---
 
