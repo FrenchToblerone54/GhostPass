@@ -900,6 +900,17 @@ async def cb_sub_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         await query.message.reply_text(f"🔗 `{sub_url}`", parse_mode="Markdown")
 
+async def cb_sub_configs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    sub_id = query.data.split(":", 2)[2]
+    configs = await gg.get_subscription_configs(sub_id)
+    if not configs:
+        await query.message.reply_text(t("ghostgate_error"))
+        return
+    for c in configs:
+        await query.message.reply_text(f"*{c['node']}*\n`{c['config']}`", parse_mode="Markdown")
+
 async def cb_sub_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -2284,12 +2295,8 @@ async def sub_bulk_note_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     selected = ctx.user_data.pop("snote_selected", [])
     ctx.user_data.pop("snote_subs", None)
     ctx.user_data.pop("snote_page", None)
-    count = 0
-    for sub_id in selected:
-        result = await gg.update_subscription(sub_id, note=note)
-        if result is not None:
-            count += 1
-    await update.message.reply_text(t("subs_bulk_note_done", count=count), reply_markup=back_kb("adm:subs"))
+    await gg.bulk_note(selected, note=note or None)
+    await update.message.reply_text(t("subs_bulk_note_done", count=len(selected)), reply_markup=back_kb("adm:subs"))
     return ConversationHandler.END
 
 async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2467,6 +2474,7 @@ def get_handlers():
         CallbackQueryHandler(cb_adm_subs, pattern=r"^adm:subs$"),
         CallbackQueryHandler(cb_sub_detail, pattern=r"^adm:sub:detail:"),
         CallbackQueryHandler(cb_sub_stats, pattern=r"^sub:stats:"),
+        CallbackQueryHandler(cb_sub_configs, pattern=r"^sub:configs:"),
         CallbackQueryHandler(cb_sub_delete, pattern=r"^adm:sub:delete:"),
         CallbackQueryHandler(cb_subs_page, pattern=r"^subs_page:"),
         CallbackQueryHandler(cb_adm_users, pattern=r"^adm:users$"),

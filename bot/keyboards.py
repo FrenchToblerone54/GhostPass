@@ -131,7 +131,7 @@ def sub_detail_kb(sub_id, enabled):
 
 def sub_actions_kb(sub_id, back_cb):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t("btn_sub_stats"), callback_data=f"sub:stats:{sub_id}")],
+        [InlineKeyboardButton(t("btn_sub_stats"), callback_data=f"sub:stats:{sub_id}"), InlineKeyboardButton(t("btn_sub_configs"), callback_data=f"sub:configs:{sub_id}")],
         [InlineKeyboardButton(t("btn_delete"), callback_data=f"adm:sub:delete:{sub_id}")],
         [InlineKeyboardButton(t("btn_back"), callback_data=back_cb)],
     ])

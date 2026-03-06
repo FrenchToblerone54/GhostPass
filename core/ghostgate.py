@@ -96,6 +96,17 @@ async def delete_subscription(sub_id):
 async def update_subscription(sub_id, **kwargs):
     return await _put(f"subscriptions/{sub_id}", json=kwargs)
 
+async def bulk_note(sub_ids, note=None):
+    body = {"sub_ids": sub_ids}
+    if note:
+        body["note"] = note
+    r = await _post("bulk/note", json=body)
+    return r.json() if r else None
+
+async def get_subscription_configs(sub_id):
+    r = await _get(f"subscriptions/{sub_id}/configs")
+    return r.json() if r else []
+
 async def get_subscription_stats(sub_id):
     r = await _get(f"subscriptions/{sub_id}/stats")
     return r.json() if r else None
