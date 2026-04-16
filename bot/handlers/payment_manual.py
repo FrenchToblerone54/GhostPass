@@ -1,4 +1,5 @@
 import logging
+from decimal import Decimal
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, ConversationHandler, filters
 import core.db as db
@@ -33,9 +34,19 @@ async def cb_buy_manual(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not available:
         await query.edit_message_text(t("manual_no_address"))
         return ConversationHandler.END
+    discount_pct = ctx.user_data.get(f"discount_pct:{plan_id}", 0)
+    if not discount_pct:
+        offer = await db.get_active_offer_for_plan(plan_id)
+        if offer:
+            discount_pct = offer["discount_percent"]
+    effective_price = float(Decimal(str(plan["price"]))*(1-Decimal(str(discount_pct))/100)) if discount_pct else plan["price"]
+    discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
+    ctx.user_data.pop(f"discount_pct:{plan_id}", None)
+    if discount_code_used:
+        await db.use_discount_code(discount_code_used)
     ctx.user_data["manual_plan_id"]=plan_id
     ctx.user_data["manual_plan_name"]=plan["name"]
-    ctx.user_data["manual_plan_price"]=plan["price"]
+    ctx.user_data["manual_plan_price"]=effective_price
     rows=[]
     for chain in ("TRC20", "BSC", "POLYGON"):
         if available.get(chain):

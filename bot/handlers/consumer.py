@@ -2,7 +2,7 @@ import io
 import json
 import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters
 import core.db as db
 import core.ghostgate as gg
 from core.currency import get_base_currency, fmt_price_for_method, price_for_method, fmt
@@ -10,6 +10,7 @@ from decimal import Decimal
 from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb, subs_list_kb, sub_detail_kb
 from bot.strings import t
 from bot.guards import ensure_force_join
+from bot.states import CONSUMER_DISCOUNT_INPUT
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await ensure_force_join(update, ctx):
         return
     show_trial = await db.get_setting("trial_enabled", "0")=="1" and not await db.has_trial_claim(uid)
-    await update.message.reply_text(t("welcome"), reply_markup=main_consumer_kb(show_trial))
+    welcome_text = await db.get_setting("start_msg", "") or t("welcome")
+    await update.message.reply_text(welcome_text, reply_markup=main_consumer_kb(show_trial))
 
 async def cmd_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _ensure_user(update)
@@ -245,6 +247,11 @@ async def cmd_support(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(t("support_no_contact"))
 
+async def _discounted_price(price, discount_pct):
+    if not discount_pct:
+        return price
+    return float(Decimal(str(price))*(1-Decimal(str(discount_pct))/100))
+
 async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -260,22 +267,28 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     requests_enabled = await db.get_setting("requests_enabled", "0")=="1"
     manual_enabled = await db.get_setting("manual_enabled", "1")=="1"
     support = await db.get_setting("support_username", "")
+    discount_pct = ctx.user_data.get(f"discount_pct:{plan_id}", 0)
+    if not discount_pct:
+        offer = await db.get_active_offer_for_plan(plan_id)
+        if offer:
+            discount_pct = offer["discount_percent"]
+    effective_price = await _discounted_price(plan["price"], discount_pct)
     data_text=t("adm_unlimited") if float(plan["data_gb"])==0 else f"{plan['data_gb']} GB"
     days_text=t("adm_no_expiry") if int(plan["days"])==0 else str(plan["days"])
     ip_text=t("adm_unlimited") if int(plan["ip_limit"])==0 else str(plan["ip_limit"])
     text = t("plan_detail", name=plan["name"], data_text=data_text, days_text=days_text, ip_text=ip_text)
     prices = ""
     if card_enabled:
-        prices += f"\n{t('plan_price_line_card', price=await fmt_price_for_method(plan['price'], 'card'))}"
+        prices += f"\n{t('plan_price_line_card', price=await fmt_price_for_method(effective_price, 'card'))}"
     if crypto_enabled:
-        prices += f"\n{t('plan_price_line_crypto', price=await fmt_price_for_method(plan['price'], 'crypto'))}"
+        prices += f"\n{t('plan_price_line_crypto', price=await fmt_price_for_method(effective_price, 'crypto'))}"
     if requests_enabled:
-        prices += f"\n{t('plan_price_line_request', price=await fmt_price_for_method(plan['price'], 'request'))}"
+        prices += f"\n{t('plan_price_line_request', price=await fmt_price_for_method(effective_price, 'request'))}"
     if manual_enabled:
-        prices += f"\n{t('plan_price_line_manual', price=await fmt_price_for_method(plan['price'], 'manual'))}"
+        prices += f"\n{t('plan_price_line_manual', price=await fmt_price_for_method(effective_price, 'manual'))}"
     if not prices:
         base = await get_base_currency()
-        prices = "\n" + t("plan_price_fallback", price=f"{fmt(Decimal(str(plan['price'])), 0, base)} {base}")
+        prices = "\n" + t("plan_price_fallback", price=f"{fmt(Decimal(str(effective_price)), 0, base)} {base}")
     text += prices
     if not card_enabled and not crypto_enabled and not requests_enabled and not manual_enabled:
         if support:
@@ -284,7 +297,7 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             text += t("support_purchase_no_contact")
         await query.edit_message_text(text, reply_markup=back_kb("consumer:plans"), parse_mode="Markdown")
         return
-    kb = plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled)
+    kb = plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled, discount_pct=discount_pct)
     await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
 async def cb_consumer_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -305,6 +318,16 @@ async def cb_consumer_plans_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     ctx.user_data["consumer_plans_page"]=page-1 if direction=="prev" else page+1
     await _show_plans(update, ctx)
 
+async def _trial_not_available_msg():
+    custom = await db.get_setting("trial_disabled_message", "")
+    return custom if custom else t("trial_not_available")
+
+async def _trial_limit_reached():
+    max_claims = int(await db.get_setting("trial_max_claims", "0"))
+    if max_claims<=0:
+        return False
+    return await db.count_trial_claims()>=max_claims
+
 async def cmd_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = await _ensure_user(update)
     if await _check_banned(update):
@@ -312,7 +335,10 @@ async def cmd_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await ensure_force_join(update, ctx):
         return
     if await db.get_setting("trial_enabled", "0")!="1":
-        await update.message.reply_text(t("trial_not_available"))
+        await update.message.reply_text(await _trial_not_available_msg())
+        return
+    if await _trial_limit_reached():
+        await update.message.reply_text(t("trial_limit_reached"))
         return
     if await db.has_trial_claim(uid):
         await update.message.reply_text(t("trial_already_claimed"))
@@ -335,7 +361,10 @@ async def cb_trial_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     uid = await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
     if await db.get_setting("trial_enabled", "0")!="1":
-        await query.edit_message_text(t("trial_not_available"))
+        await query.edit_message_text(await _trial_not_available_msg())
+        return
+    if await _trial_limit_reached():
+        await query.edit_message_text(t("trial_limit_reached"))
         return
     if await db.has_trial_claim(uid):
         await query.edit_message_text(t("trial_already_claimed"))
@@ -382,8 +411,62 @@ async def handle_menu_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     elif text==t("btn_consumer_trial"):
         await cmd_trial(update, ctx)
 
+async def cb_sub_configs_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    sub_id = query.data.split(":", 2)[2]
+    configs = await gg.get_subscription_configs(sub_id)
+    if not configs:
+        await query.message.reply_text(t("service_unavailable"))
+        return
+    for c in configs:
+        await query.message.reply_text(f"*{c['node']}*\n`{c['config']}`", parse_mode="Markdown")
+
+async def cb_discount_entry(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plan_id = query.data.split(":", 2)[2]
+    ctx.user_data["discount_plan_id"] = plan_id
+    await query.edit_message_text(t("discount_code_prompt"), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_back"), callback_data=f"plan:{plan_id}")]]))
+    return CONSUMER_DISCOUNT_INPUT
+
+async def discount_code_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    plan_id = ctx.user_data.pop("discount_plan_id", "")
+    if val=="-":
+        ctx.user_data.pop(f"discount_pct:{plan_id}", None)
+        ctx.user_data.pop(f"discount_code:{plan_id}", None)
+        await update.message.reply_text(t("setting_saved"))
+        return ConversationHandler.END
+    code = await db.get_discount_code(val)
+    if not code or not code["is_active"]:
+        await update.message.reply_text(t("discount_invalid"))
+        return ConversationHandler.END
+    if code["max_uses"]>0 and code["uses"]>=code["max_uses"]:
+        await update.message.reply_text(t("discount_exhausted"))
+        return ConversationHandler.END
+    ctx.user_data[f"discount_pct:{plan_id}"] = code["discount_percent"]
+    ctx.user_data[f"discount_code:{plan_id}"] = code["code"]
+    plan = await db.get_plan(plan_id)
+    if plan:
+        effective = float(Decimal(str(plan["price"]))*(1-Decimal(str(code["discount_percent"]))/100))
+        from core.currency import get_base_currency, fmt
+        base = await get_base_currency()
+        price_str = f"{fmt(Decimal(str(effective)), 0, base)} {base}"
+        await update.message.reply_text(t("discount_applied", pct=code["discount_percent"], price=price_str))
+    return ConversationHandler.END
+
+def _get_discount_conv():
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_discount_entry, pattern=r"^buy:discount:")],
+        states={CONSUMER_DISCOUNT_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_code_message)]},
+        fallbacks=[CallbackQueryHandler(lambda u, c: ConversationHandler.END, pattern=r"^plan:")],
+        per_message=False
+    )
+
 def get_handlers():
     return [
+        _get_discount_conv(),
         CommandHandler("start", cmd_start),
         CommandHandler("plans", cmd_plans),
         CommandHandler("mystatus", cmd_mystatus),
@@ -403,4 +486,5 @@ def get_handlers():
         CallbackQueryHandler(cb_regen_confirm, pattern=r"^sub:regen_yes:"),
         CallbackQueryHandler(cb_regen_cancel, pattern=r"^sub:regen_no:"),
         CallbackQueryHandler(cb_toggle_sub, pattern=r"^sub:toggle:"),
+        CallbackQueryHandler(cb_sub_configs_user, pattern=r"^sub:configs_user:"),
     ]

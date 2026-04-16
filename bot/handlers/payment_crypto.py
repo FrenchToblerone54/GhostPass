@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from aiohttp import web
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.ext import ContextTypes, CallbackQueryHandler
@@ -112,14 +113,24 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             use_ghostpayments, gp_chain, gp_token = False, "", ""
     else:
         gp_chain, gp_token = "", ""
-    gp_amount, gp_code, gp_decimals = await price_for_gp_pair(plan["price"], gp_chain, gp_token) if use_ghostpayments else (None, "", 0)
+    discount_pct = ctx.user_data.get(f"discount_pct:{plan_id}", 0)
+    if not discount_pct:
+        offer = await db.get_active_offer_for_plan(plan_id)
+        if offer:
+            discount_pct = offer["discount_percent"]
+    effective_price = float(Decimal(str(plan["price"]))*(1-Decimal(str(discount_pct))/100)) if discount_pct else plan["price"]
+    discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
+    ctx.user_data.pop(f"discount_pct:{plan_id}", None)
+    if discount_code_used:
+        await db.use_discount_code(discount_code_used)
+    gp_amount, gp_code, gp_decimals = await price_for_gp_pair(effective_price, gp_chain, gp_token) if use_ghostpayments else (None, "", 0)
     if use_ghostpayments and gp_amount is None:
         if use_btcpay or (merchant_id and api_key):
             use_ghostpayments=False
         else:
             await query.edit_message_text(t("ghostpayments_no_rate", chain=gp_chain, token=gp_token), parse_mode="Markdown")
             return
-    amount, code, decimals = await price_for_method(plan["price"], "crypto")
+    amount, code, decimals = await price_for_method(effective_price, "crypto")
     price_str = f"{fmt(gp_amount, gp_decimals, gp_code)} {gp_code}" if use_ghostpayments else f"{fmt(amount, decimals, code)} {code}"
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")

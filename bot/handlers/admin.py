@@ -20,7 +20,7 @@ from bot.keyboards import (
     main_admin_kb, settings_kb, back_kb, plan_actions_kb,
     user_actions_kb, sub_actions_kb, node_select_kb,
     order_detail_kb, skip_kb, cancel_kb, currencies_kb,
-    method_select_kb, curr_detail_kb, base_select_kb, subs_bulk_note_kb
+    method_select_kb, curr_detail_kb, base_select_kb, subs_bulk_note_kb, logs_kb
 )
 from bot.strings import t
 from bot.states import (
@@ -43,7 +43,12 @@ from bot.states import (
     SETTINGS_USDT_TRC20, SETTINGS_USDT_BSC, SETTINGS_USDT_POLYGON,
     SETTINGS_GP_PAIR_RATE,
     SETTINGS_USDT_TRC20_RATE, SETTINGS_USDT_BSC_RATE, SETTINGS_USDT_POL_RATE,
-    ADMIN_SUB_BULK_NOTE_SELECT, ADMIN_SUB_BULK_NOTE_INPUT
+    ADMIN_SUB_BULK_NOTE_SELECT, ADMIN_SUB_BULK_NOTE_INPUT,
+    SETTINGS_TRIAL_DISABLED_MSG, SETTINGS_TRIAL_MAX_CLAIMS,
+    SETTINGS_DISCOUNT_CODE_CODE, SETTINGS_DISCOUNT_CODE_PCT, SETTINGS_DISCOUNT_CODE_MAXUSES,
+    PLAN_BULK_ENABLE_DISABLE, PLAN_BULK_PRICE_MULTIPLY, PLAN_BULK_PRICE_FACTOR,
+    OFFER_CREATE_NAME, OFFER_CREATE_DISCOUNT, OFFER_CREATE_PLANS,
+    SETTINGS_START_MSG
 )
 from config import settings
 
@@ -271,6 +276,8 @@ async def cb_adm_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rows.append([InlineKeyboardButton(t("adm_bulk_create_btn"), callback_data="plan:bulk_create")])
     rows.append([InlineKeyboardButton(t("adm_bulk_nodes_btn"), callback_data="plans:bulk_nodes")])
     rows.append([InlineKeyboardButton(t("adm_bulk_delete_btn"), callback_data="plans:bulk_delete")])
+    rows.append([InlineKeyboardButton(t("adm_bulk_enable_btn"), callback_data="plans:bulk_enable"), InlineKeyboardButton(t("adm_bulk_disable_btn"), callback_data="plans:bulk_disable")])
+    rows.append([InlineKeyboardButton(t("adm_bulk_price_multiply_btn"), callback_data="plans:bulk_price_multiply"), InlineKeyboardButton(t("adm_bulk_price_divide_btn"), callback_data="plans:bulk_price_divide")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     title=t("plans_title")
     if total>per_page:
@@ -321,6 +328,7 @@ async def cb_plan_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     plan_id = query.data.split(":", 2)[2]
     await db.delete_plan(plan_id)
+    await db.log_admin_action(update.effective_user.id, "delete_plan", plan_id)
     await query.edit_message_text(t("plan_deleted"), reply_markup=back_kb("adm:plans"))
 
 async def cb_plan_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -841,6 +849,177 @@ async def plans_bulk_delete_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(t("adm_bulk_delete_done", count=len(selected)), reply_markup=back_kb("adm:plans"))
     return ConversationHandler.END
 
+async def cb_plans_bulk_enable(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    plans=await db.list_plans(active_only=False)
+    if not plans:
+        await query.edit_message_text(t("no_plans_admin"), reply_markup=back_kb("adm:plans"))
+        return ConversationHandler.END
+    ctx.user_data["bulk_enable_plan_ids"]=[]
+    ctx.user_data["bulk_enable_mode"]="enable"
+    await query.edit_message_text(t("adm_bulk_enable_prompt"), reply_markup=_plan_select_kb(plans, [], "plans:bulk_toggle_done", "adm:plans", "plans:bulk_toggle_all", "plans:bulk_toggle_none"))
+    return PLAN_BULK_ENABLE_DISABLE
+
+async def cb_plans_bulk_disable(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    plans=await db.list_plans(active_only=False)
+    if not plans:
+        await query.edit_message_text(t("no_plans_admin"), reply_markup=back_kb("adm:plans"))
+        return ConversationHandler.END
+    ctx.user_data["bulk_enable_plan_ids"]=[]
+    ctx.user_data["bulk_enable_mode"]="disable"
+    await query.edit_message_text(t("adm_bulk_disable_prompt"), reply_markup=_plan_select_kb(plans, [], "plans:bulk_toggle_done", "adm:plans", "plans:bulk_toggle_all", "plans:bulk_toggle_none"))
+    return PLAN_BULK_ENABLE_DISABLE
+
+async def plans_bulk_toggle_plan(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    plan_id=query.data.split(":", 1)[1]
+    selected=ctx.user_data.get("bulk_enable_plan_ids", [])
+    if plan_id in selected:
+        selected.remove(plan_id)
+    else:
+        selected.append(plan_id)
+    ctx.user_data["bulk_enable_plan_ids"]=selected
+    plans=await db.list_plans(active_only=False)
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, selected, "plans:bulk_toggle_done", "adm:plans", "plans:bulk_toggle_all", "plans:bulk_toggle_none"))
+    return PLAN_BULK_ENABLE_DISABLE
+
+async def plans_bulk_toggle_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    plans=await db.list_plans(active_only=False)
+    selected=[p["id"] for p in plans]
+    ctx.user_data["bulk_enable_plan_ids"]=selected
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, selected, "plans:bulk_toggle_done", "adm:plans", "plans:bulk_toggle_all", "plans:bulk_toggle_none"))
+    return PLAN_BULK_ENABLE_DISABLE
+
+async def plans_bulk_toggle_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    plans=await db.list_plans(active_only=False)
+    ctx.user_data["bulk_enable_plan_ids"]=[]
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, [], "plans:bulk_toggle_done", "adm:plans", "plans:bulk_toggle_all", "plans:bulk_toggle_none"))
+    return PLAN_BULK_ENABLE_DISABLE
+
+async def plans_bulk_toggle_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    selected=ctx.user_data.pop("bulk_enable_plan_ids", [])
+    mode=ctx.user_data.pop("bulk_enable_mode", "enable")
+    if not selected:
+        await query.answer(t("invalid_input"), show_alert=True)
+        return PLAN_BULK_ENABLE_DISABLE
+    val=1 if mode=="enable" else 0
+    for plan_id in selected:
+        await db.update_plan(plan_id, is_active=val)
+    msg=t("adm_bulk_enable_done", count=len(selected)) if mode=="enable" else t("adm_bulk_disable_done", count=len(selected))
+    await query.edit_message_text(msg, reply_markup=back_kb("adm:plans"))
+    return ConversationHandler.END
+
+async def cb_plans_bulk_price_multiply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    plans=await db.list_plans(active_only=False)
+    if not plans:
+        await query.edit_message_text(t("no_plans_admin"), reply_markup=back_kb("adm:plans"))
+        return ConversationHandler.END
+    ctx.user_data["bulk_price_plan_ids"]=[]
+    ctx.user_data["bulk_price_op"]="multiply"
+    await query.edit_message_text(t("adm_bulk_price_select_plans"), reply_markup=_plan_select_kb(plans, [], "plans:bulk_price_done", "adm:plans", "plans:bulk_price_all", "plans:bulk_price_none"))
+    return PLAN_BULK_PRICE_MULTIPLY
+
+async def cb_plans_bulk_price_divide(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    plans=await db.list_plans(active_only=False)
+    if not plans:
+        await query.edit_message_text(t("no_plans_admin"), reply_markup=back_kb("adm:plans"))
+        return ConversationHandler.END
+    ctx.user_data["bulk_price_plan_ids"]=[]
+    ctx.user_data["bulk_price_op"]="divide"
+    await query.edit_message_text(t("adm_bulk_price_select_plans"), reply_markup=_plan_select_kb(plans, [], "plans:bulk_price_done", "adm:plans", "plans:bulk_price_all", "plans:bulk_price_none"))
+    return PLAN_BULK_PRICE_MULTIPLY
+
+async def plans_bulk_price_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    plan_id=query.data.split(":", 1)[1]
+    selected=ctx.user_data.get("bulk_price_plan_ids", [])
+    if plan_id in selected:
+        selected.remove(plan_id)
+    else:
+        selected.append(plan_id)
+    ctx.user_data["bulk_price_plan_ids"]=selected
+    plans=await db.list_plans(active_only=False)
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, selected, "plans:bulk_price_done", "adm:plans", "plans:bulk_price_all", "plans:bulk_price_none"))
+    return PLAN_BULK_PRICE_MULTIPLY
+
+async def plans_bulk_price_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    plans=await db.list_plans(active_only=False)
+    selected=[p["id"] for p in plans]
+    ctx.user_data["bulk_price_plan_ids"]=selected
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, selected, "plans:bulk_price_done", "adm:plans", "plans:bulk_price_all", "plans:bulk_price_none"))
+    return PLAN_BULK_PRICE_MULTIPLY
+
+async def plans_bulk_price_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    plans=await db.list_plans(active_only=False)
+    ctx.user_data["bulk_price_plan_ids"]=[]
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, [], "plans:bulk_price_done", "adm:plans", "plans:bulk_price_all", "plans:bulk_price_none"))
+    return PLAN_BULK_PRICE_MULTIPLY
+
+async def plans_bulk_price_factor_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    selected=ctx.user_data.get("bulk_price_plan_ids", [])
+    if not selected:
+        await query.answer(t("invalid_input"), show_alert=True)
+        return PLAN_BULK_PRICE_MULTIPLY
+    await query.edit_message_text(t("adm_bulk_price_factor_prompt"), reply_markup=cancel_kb())
+    return PLAN_BULK_PRICE_FACTOR
+
+async def plans_bulk_price_factor_save(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        factor=Decimal(update.message.text.strip().replace(",", ""))
+        if factor<=0:
+            raise ValueError
+    except Exception:
+        await update.message.reply_text(t("invalid_input"))
+        return PLAN_BULK_PRICE_FACTOR
+    selected=ctx.user_data.pop("bulk_price_plan_ids", [])
+    op=ctx.user_data.pop("bulk_price_op", "multiply")
+    base=await get_base_currency()
+    count=0
+    for plan_id in selected:
+        plan=await db.get_plan(plan_id)
+        if not plan:
+            continue
+        old=Decimal(str(plan["price"]))
+        new=old*factor if op=="multiply" else old/factor
+        new=new.quantize(Decimal("1") if base=="IRT" else Decimal("0.01"))
+        if base=="IRT":
+            iv=int(new)
+            iv=max(1000, (iv//1000)*1000)
+            new=Decimal(iv)
+        await db.update_plan(plan_id, price=float(new))
+        count+=1
+    await update.message.reply_text(t("adm_bulk_price_done", count=count), reply_markup=back_kb("adm:plans"))
+    return ConversationHandler.END
+
 async def cb_adm_subs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -916,7 +1095,14 @@ async def cb_sub_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     sub_id = query.data.split(":", 3)[3]
     await gg.delete_subscription(sub_id)
+    await db.log_admin_action(update.effective_user.id, "delete_sub", sub_id)
     await query.edit_message_text(t("sub_deleted"), reply_markup=back_kb("adm:subs"))
+
+async def cb_sub_reset_traffic(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    sub_id = query.data.split(":", 4)[4]
+    ok = await gg.reset_subscription_traffic(sub_id)
+    await query.answer(t("sub_traffic_reset") if ok else t("sub_traffic_reset_fail"), show_alert=True)
 
 async def cb_sub_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _is_admin(update.effective_user.id):
@@ -1109,6 +1295,7 @@ async def cb_user_ban(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = await db.get_user_by_id(uid)
     if user:
         await db.ban_user(user["telegram_id"], True)
+        await db.log_admin_action(update.effective_user.id, "ban_user", str(user["telegram_id"]))
     await query.edit_message_text(t("user_banned"), reply_markup=back_kb("adm:users"))
 
 async def cb_user_unban(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1118,6 +1305,7 @@ async def cb_user_unban(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = await db.get_user_by_id(uid)
     if user:
         await db.ban_user(user["telegram_id"], False)
+        await db.log_admin_action(update.effective_user.id, "unban_user", str(user["telegram_id"]))
     await query.edit_message_text(t("user_unbanned"), reply_markup=back_kb("adm:users"))
 
 async def cb_user_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1210,6 +1398,7 @@ async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sub_id = result.get("id")
     sub_url = result.get("url", "")
     await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
+    await db.log_admin_action(update.effective_user.id, "confirm_order", f"order:{order_id} sub:{sub_id}")
     admin_name = update.effective_user.first_name or str(update.effective_user.id)
     try:
         await query.edit_message_caption(caption=f"{query.message.caption or ''}\n\n{t('admin_confirmed', admin=admin_name, sub_id=sub_id)}", reply_markup=None)
@@ -1252,6 +1441,7 @@ async def _do_reject(order_id, reason, update, ctx):
     if not order:
         return
     await db.update_order(order_id, status="rejected")
+    await db.log_admin_action(update.effective_user.id, "reject_order", f"order:{order_id}")
     user = await db.get_user_by_id(order["user_id"])
     if user:
         if reason:
@@ -1672,23 +1862,44 @@ async def settings_plan_page_size_admin(update: Update, ctx: ContextTypes.DEFAUL
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:plan_pagination"))
     return ConversationHandler.END
 
+async def _get_force_join_channels_admin():
+    raw=await db.get_setting("force_join_channels", "")
+    if raw:
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    single=(await db.get_setting("force_join_channel", "") or "").strip()
+    return [single] if single else []
+
 async def cb_set_force_join(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     enabled=await db.get_setting("force_join_enabled", "0")=="1"
-    channel=await db.get_setting("force_join_channel", "")
-    rows=[
-        [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:force_join_toggle")],
-        [InlineKeyboardButton(t("adm_force_join_set_channel"), callback_data="set:force_join_channel")],
-        [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
-    ]
-    await query.edit_message_text(t("adm_force_join_title", status=t("adm_enabled") if enabled else t("adm_disabled"), channel=channel or "-"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    channels=await _get_force_join_channels_admin()
+    rows=[[InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:force_join_toggle")]]
+    for i, ch in enumerate(channels):
+        rows.append([InlineKeyboardButton(t("adm_force_join_remove_btn", channel=ch), callback_data=f"set:force_join_remove:{i}")])
+    rows.append([InlineKeyboardButton(t("adm_force_join_set_channel"), callback_data="set:force_join_channel")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")])
+    channels_text="\n".join(f"`{ch}`" for ch in channels) if channels else t("adm_force_join_no_channels")
+    await query.edit_message_text(t("adm_force_join_title", status=t("adm_enabled") if enabled else t("adm_disabled"), channels=channels_text), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
 async def cb_force_join_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     enabled=await db.get_setting("force_join_enabled", "0")=="1"
     await db.set_setting("force_join_enabled", "0" if enabled else "1")
+    await cb_set_force_join(update, ctx)
+
+async def cb_force_join_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    idx=int(query.data.split(":", 2)[2])
+    channels=await _get_force_join_channels_admin()
+    if 0<=idx<len(channels):
+        channels.pop(idx)
+    await db.set_setting("force_join_channels", json.dumps(channels))
     await cb_set_force_join(update, ctx)
 
 async def cb_set_force_join_channel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1701,8 +1912,6 @@ async def cb_set_force_join_channel(update: Update, ctx: ContextTypes.DEFAULT_TY
 
 async def settings_force_join_channel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     val=update.message.text.strip()
-    if val=="-":
-        val=""
     if val:
         try:
             me=await ctx.bot.get_me()
@@ -1710,7 +1919,11 @@ async def settings_force_join_channel(update: Update, ctx: ContextTypes.DEFAULT_
         except Exception:
             await update.message.reply_text(t("invalid_input"))
             return SETTINGS_FORCE_JOIN_CHANNEL
-    await db.set_setting("force_join_channel", val)
+    if val:
+        channels=await _get_force_join_channels_admin()
+        if val not in channels:
+            channels.append(val)
+        await db.set_setting("force_join_channels", json.dumps(channels))
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:force_join"))
     return ConversationHandler.END
 
@@ -2085,14 +2298,19 @@ async def cb_set_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     expire_h = int(await db.get_setting("trial_expire_seconds", "86400"))//3600
     node_ids = json.loads(await db.get_setting("trial_node_ids", "[]"))
     start_after_use = await db.get_setting("trial_start_after_use", "1")=="1"
+    max_claims = await db.get_setting("trial_max_claims", "0")
+    claim_count = await db.count_trial_claims()
     await query.edit_message_text(
-        t("trial_settings", status=t("adm_enabled") if enabled else t("adm_disabled"), data_gb=data_gb, expire_h=expire_h, node_count=len(node_ids))+f"\n{t('adm_trial_after_use_status', status=t('adm_enabled') if start_after_use else t('adm_disabled'))}",
+        t("trial_settings", status=t("adm_enabled") if enabled else t("adm_disabled"), data_gb=data_gb, expire_h=expire_h, node_count=len(node_ids))+f"\n{t('adm_trial_after_use_status', status=t('adm_enabled') if start_after_use else t('adm_disabled'))}\n🔢 Claims: {claim_count}/{max_claims if max_claims!='0' else '∞'}",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:trial_toggle")],
             [InlineKeyboardButton(t("adm_trial_set_data"), callback_data="set:trial_data")],
             [InlineKeyboardButton(t("adm_trial_set_expire"), callback_data="set:trial_expire")],
             [InlineKeyboardButton(t("adm_trial_set_nodes"), callback_data="set:trial_nodes")],
             [InlineKeyboardButton(t("adm_trial_set_note"), callback_data="set:trial_note")],
+            [InlineKeyboardButton(t("adm_trial_set_disabled_msg"), callback_data="set:trial_disabled_msg")],
+            [InlineKeyboardButton(t("adm_trial_set_max_claims"), callback_data="set:trial_max_claims")],
+            [InlineKeyboardButton(t("adm_trial_reset_claims_btn"), callback_data="set:trial_reset_claims")],
             [InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")],
         ]),
         parse_mode="Markdown"
@@ -2199,9 +2417,53 @@ async def cb_set_trial_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def settings_trial_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     val = update.message.text.strip()
-    await db.set_setting("trial_note", "" if val=="-" else val)
+    new_note = "" if val=="-" else val
+    await db.set_setting("trial_note", new_note)
+    trials = await db.list_trial_claims()
+    sub_ids = [tc["ghostgate_sub_id"] for tc in trials if tc.get("ghostgate_sub_id")]
+    if sub_ids:
+        await gg.bulk_note(sub_ids, note=new_note or None)
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
     return ConversationHandler.END
+
+async def cb_set_trial_disabled_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    current = await db.get_setting("trial_disabled_message", "") or "-"
+    await query.edit_message_text(t("adm_trial_disabled_msg_prompt", current=current), reply_markup=cancel_kb())
+    return SETTINGS_TRIAL_DISABLED_MSG
+
+async def settings_trial_disabled_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    await db.set_setting("trial_disabled_message", "" if val=="-" else val)
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
+    return ConversationHandler.END
+
+async def cb_set_trial_max_claims(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    current = await db.get_setting("trial_max_claims", "0")
+    await query.edit_message_text(t("adm_trial_max_claims_prompt", current=current), reply_markup=cancel_kb())
+    return SETTINGS_TRIAL_MAX_CLAIMS
+
+async def settings_trial_max_claims(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = int(update.message.text.strip())
+        if val<0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_TRIAL_MAX_CLAIMS
+    await db.set_setting("trial_max_claims", str(val))
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
+    return ConversationHandler.END
+
+async def cb_trial_reset_claims(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    count = await db.reset_trial_claims()
+    await query.answer(t("adm_trial_reset_claims_done", count=count), show_alert=True)
+    await cb_set_trial(update, ctx)
 
 async def cb_set_paid_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2212,7 +2474,27 @@ async def cb_set_paid_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def settings_paid_note(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     val = update.message.text.strip()
-    await db.set_setting("paid_note", "" if val=="-" else val)
+    new_note = "" if val=="-" else val
+    await db.set_setting("paid_note", new_note)
+    orders = await db.get_paid_orders_with_sub()
+    sub_ids = [o["ghostgate_sub_id"] for o in orders if o.get("ghostgate_sub_id")]
+    if sub_ids:
+        await gg.bulk_note(sub_ids, note=new_note or None)
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
+    return ConversationHandler.END
+
+async def cb_set_start_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    current = await db.get_setting("start_msg", "") or "-"
+    await query.edit_message_text(t("adm_start_msg_prompt", current=current), reply_markup=cancel_kb())
+    return SETTINGS_START_MSG
+
+async def settings_start_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip()
+    await db.set_setting("start_msg", "" if val=="-" else val)
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
 
@@ -2313,6 +2595,226 @@ async def cb_cancel_conv(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(t("adm_cancelled"), reply_markup=back_kb("adm:back"))
     return ConversationHandler.END
 
+async def cb_adm_offers(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    offers = await db.list_offers()
+    if offers:
+        lines = [t("adm_offer_item", name=o["name"], pct=o["discount_percent"], plan_count=len(o["plan_ids"]) if o["plan_ids"] else "all", status=t("adm_active") if o["is_active"] else t("adm_inactive")) for o in offers]
+        list_text = "\n".join(lines)
+    else:
+        list_text = t("adm_offer_none")
+    rows = [[InlineKeyboardButton(t("adm_offer_add_btn"), callback_data="offer:add")]]
+    for o in offers:
+        rows.append([InlineKeyboardButton(f"{'✅' if o['is_active'] else '❌'} {o['name']} — {o['discount_percent']}%", callback_data=f"offer:toggle:{o['id']}"), InlineKeyboardButton("🗑️", callback_data=f"offer:delete:{o['id']}")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
+    await query.edit_message_text(t("adm_offers_title", list=list_text), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+_LOGS_PER_PAGE = 10
+
+async def cb_adm_logs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    page = ctx.user_data.get("logs_page", 0)
+    logs, total = await db.list_admin_logs(offset=page*_LOGS_PER_PAGE, limit=_LOGS_PER_PAGE)
+    if logs:
+        lines = [t("adm_log_entry", created_at=lg["created_at"][:16], admin_id=lg["admin_id"], action=lg["action"], details=f" — {lg['details']}" if lg["details"] else "") for lg in logs]
+        entries = "\n".join(lines)
+    else:
+        entries = t("adm_logs_empty")
+    await query.edit_message_text(t("adm_logs_title", entries=entries), reply_markup=logs_kb(page, total, _LOGS_PER_PAGE), parse_mode="Markdown")
+
+async def cb_logs_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    direction = query.data.split(":", 2)[2]
+    page = ctx.user_data.get("logs_page", 0)
+    ctx.user_data["logs_page"] = max(0, page-1) if direction=="prev" else page+1
+    await cb_adm_logs(update, ctx)
+
+async def cb_offer_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_offer_name_prompt"), reply_markup=cancel_kb())
+    return OFFER_CREATE_NAME
+
+async def offer_name_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["new_offer_name"] = update.message.text.strip()
+    await update.message.reply_text(t("adm_offer_pct_prompt"), reply_markup=cancel_kb())
+    return OFFER_CREATE_DISCOUNT
+
+async def offer_pct_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text.strip())
+        if val<=0 or val>100:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return OFFER_CREATE_DISCOUNT
+    ctx.user_data["new_offer_pct"] = val
+    plans = await db.list_plans(active_only=False)
+    ctx.user_data["new_offer_plan_ids"] = []
+    await update.message.reply_text(t("adm_offer_plans_prompt"), reply_markup=_plan_select_kb(plans, [], "offer:plans_done", "cancel", "offer:plans_all", "offer:plans_none"))
+    return OFFER_CREATE_PLANS
+
+async def offer_plan_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plan_id = query.data.split(":", 1)[1]
+    selected = ctx.user_data.get("new_offer_plan_ids", [])
+    if plan_id in selected:
+        selected.remove(plan_id)
+    else:
+        selected.append(plan_id)
+    ctx.user_data["new_offer_plan_ids"] = selected
+    plans = await db.list_plans(active_only=False)
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, selected, "offer:plans_done", "cancel", "offer:plans_all", "offer:plans_none"))
+    return OFFER_CREATE_PLANS
+
+async def offer_plans_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plans = await db.list_plans(active_only=False)
+    selected = [p["id"] for p in plans]
+    ctx.user_data["new_offer_plan_ids"] = selected
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, selected, "offer:plans_done", "cancel", "offer:plans_all", "offer:plans_none"))
+    return OFFER_CREATE_PLANS
+
+async def offer_plans_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plans = await db.list_plans(active_only=False)
+    ctx.user_data["new_offer_plan_ids"] = []
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, [], "offer:plans_done", "cancel", "offer:plans_all", "offer:plans_none"))
+    return OFFER_CREATE_PLANS
+
+async def offer_plans_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    name = ctx.user_data.pop("new_offer_name", "")
+    pct = ctx.user_data.pop("new_offer_pct", 0)
+    plan_ids = ctx.user_data.pop("new_offer_plan_ids", [])
+    await db.create_offer(name, pct, plan_ids)
+    await query.edit_message_text(t("adm_offer_created", name=name), reply_markup=back_kb("adm:offers"))
+    return ConversationHandler.END
+
+async def cb_offer_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    offer_id = query.data.split(":", 2)[2]
+    await db.toggle_offer(offer_id)
+    await cb_adm_offers(update, ctx)
+
+async def cb_offer_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    offer_id = query.data.split(":", 2)[2]
+    await db.delete_offer(offer_id)
+    await cb_adm_offers(update, ctx)
+
+async def cb_adm_discounts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    codes = await db.list_discount_codes()
+    if codes:
+        lines = [t("adm_discount_item", code=c["code"], pct=c["discount_percent"], uses=c["uses"], max_uses=c["max_uses"] if c["max_uses"] else "∞", status=t("adm_active") if c["is_active"] else t("adm_inactive")) for c in codes]
+        list_text = "\n".join(lines)
+    else:
+        list_text = t("adm_discount_none")
+    rows = [[InlineKeyboardButton(t("adm_discount_add_btn"), callback_data="discount:add")]]
+    for c in codes:
+        rows.append([InlineKeyboardButton(f"{'✅' if c['is_active'] else '❌'} {c['code']} — {c['discount_percent']}% | toggle", callback_data=f"discount:toggle:{c['code']}"), InlineKeyboardButton("🗑️", callback_data=f"discount:delete:{c['code']}")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
+    await query.edit_message_text(t("adm_discounts_title", list=list_text), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+async def cb_discount_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_discount_code_prompt"), reply_markup=cancel_kb())
+    return SETTINGS_DISCOUNT_CODE_CODE
+
+async def discount_code_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    val = update.message.text.strip().upper()
+    if not val.isalnum():
+        await update.message.reply_text(t("adm_discount_invalid_code"))
+        return SETTINGS_DISCOUNT_CODE_CODE
+    existing = await db.get_discount_code(val)
+    if existing:
+        await update.message.reply_text(t("adm_discount_exists"))
+        return SETTINGS_DISCOUNT_CODE_CODE
+    ctx.user_data["new_discount_code"] = val
+    await update.message.reply_text(t("adm_discount_pct_prompt"), reply_markup=cancel_kb())
+    return SETTINGS_DISCOUNT_CODE_PCT
+
+async def discount_pct_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text.strip())
+        if val<=0 or val>100:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_DISCOUNT_CODE_PCT
+    ctx.user_data["new_discount_pct"] = val
+    await update.message.reply_text(t("adm_discount_max_uses_prompt"), reply_markup=cancel_kb())
+    return SETTINGS_DISCOUNT_CODE_MAXUSES
+
+async def discount_maxuses_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = int(update.message.text.strip())
+        if val<0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_DISCOUNT_CODE_MAXUSES
+    code = ctx.user_data.pop("new_discount_code", "")
+    pct = ctx.user_data.pop("new_discount_pct", 0)
+    await db.create_discount_code(code, pct, val)
+    await update.message.reply_text(t("adm_discount_created", code=code), reply_markup=back_kb("adm:discounts"), parse_mode="Markdown")
+    return ConversationHandler.END
+
+async def cb_discount_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":", 2)[2]
+    await db.toggle_discount_code(code)
+    await cb_adm_discounts(update, ctx)
+
+async def cb_discount_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    code = query.data.split(":", 2)[2]
+    await db.delete_discount_code(code)
+    await cb_adm_discounts(update, ctx)
+
+_LOG_PER_PAGE = 10
+
+async def cb_adm_logs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    ctx.user_data["logs_page"] = 0
+    await _show_logs(query, ctx)
+
+async def cb_adm_logs_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    direction = query.data.split(":", 2)[2]
+    page = ctx.user_data.get("logs_page", 0)
+    ctx.user_data["logs_page"] = max(0, page + (1 if direction == "next" else -1))
+    await _show_logs(query, ctx)
+
+async def _show_logs(query, ctx):
+    page = ctx.user_data.get("logs_page", 0)
+    logs, total = await db.list_admin_logs(offset=page * _LOG_PER_PAGE, limit=_LOG_PER_PAGE)
+    if logs:
+        lines = "\n".join(t("adm_log_entry", created_at=l["created_at"][:16], admin_id=l["admin_id"], action=l["action"], details=f" — {l['details']}" if l.get("details") else "") for l in logs)
+    else:
+        lines = t("adm_logs_empty")
+    await query.edit_message_text(t("adm_logs_title", entries=lines), reply_markup=logs_kb(page, total, _LOG_PER_PAGE), parse_mode="Markdown")
+
 def get_main_conv_handler():
     states = {
         WIZARD_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_url)],
@@ -2401,7 +2903,10 @@ def get_main_conv_handler():
         SETTINGS_TRIAL_EXPIRE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_expire)],
         SETTINGS_TRIAL_NODES: [CallbackQueryHandler(trial_toggle_node, pattern=r"^node_toggle:"), CallbackQueryHandler(trial_nodes_all, pattern=r"^trial:nodes_all$"), CallbackQueryHandler(trial_nodes_none, pattern=r"^trial:nodes_none$"), CallbackQueryHandler(trial_nodes_done, pattern=r"^trial:nodes_done$")],
         SETTINGS_TRIAL_NOTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_note)],
+        SETTINGS_TRIAL_DISABLED_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_disabled_msg)],
+        SETTINGS_TRIAL_MAX_CLAIMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_max_claims)],
         SETTINGS_PAID_NOTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_paid_note)],
+        SETTINGS_START_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_start_msg)],
         ADMIN_SUB_BULK_NOTE_SELECT: [
             CallbackQueryHandler(sub_bulk_note_toggle, pattern=r"^snote_toggle:"),
             CallbackQueryHandler(sub_bulk_note_all, pattern=r"^snote:all$"),
@@ -2411,6 +2916,30 @@ def get_main_conv_handler():
         ],
         ADMIN_SUB_BULK_NOTE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sub_bulk_note_save)],
         SETTINGS_GP_PAIR_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, gp_pair_rate_save)],
+        SETTINGS_DISCOUNT_CODE_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_code_input)],
+        SETTINGS_DISCOUNT_CODE_PCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_pct_input)],
+        SETTINGS_DISCOUNT_CODE_MAXUSES: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_maxuses_input)],
+        PLAN_BULK_ENABLE_DISABLE: [
+            CallbackQueryHandler(plans_bulk_toggle_plan, pattern=r"^plan_select:"),
+            CallbackQueryHandler(plans_bulk_toggle_all, pattern=r"^plans:bulk_toggle_all$"),
+            CallbackQueryHandler(plans_bulk_toggle_none, pattern=r"^plans:bulk_toggle_none$"),
+            CallbackQueryHandler(plans_bulk_toggle_done, pattern=r"^plans:bulk_toggle_done$"),
+        ],
+        PLAN_BULK_PRICE_MULTIPLY: [
+            CallbackQueryHandler(plans_bulk_price_toggle, pattern=r"^plan_select:"),
+            CallbackQueryHandler(plans_bulk_price_all, pattern=r"^plans:bulk_price_all$"),
+            CallbackQueryHandler(plans_bulk_price_none, pattern=r"^plans:bulk_price_none$"),
+            CallbackQueryHandler(plans_bulk_price_factor_prompt, pattern=r"^plans:bulk_price_done$"),
+        ],
+        PLAN_BULK_PRICE_FACTOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, plans_bulk_price_factor_save)],
+        OFFER_CREATE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, offer_name_input)],
+        OFFER_CREATE_DISCOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, offer_pct_input)],
+        OFFER_CREATE_PLANS: [
+            CallbackQueryHandler(offer_plan_toggle, pattern=r"^plan_select:"),
+            CallbackQueryHandler(offer_plans_all, pattern=r"^offer:plans_all$"),
+            CallbackQueryHandler(offer_plans_none, pattern=r"^offer:plans_none$"),
+            CallbackQueryHandler(offer_plans_done, pattern=r"^offer:plans_done$"),
+        ],
     }
     entry_points = [
         CommandHandler("start", cmd_start_admin),
@@ -2421,6 +2950,12 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_plan_edit_nodes, pattern=r"^plan:edit_nodes:"),
         CallbackQueryHandler(cb_plans_bulk_nodes, pattern=r"^plans:bulk_nodes$"),
         CallbackQueryHandler(cb_plans_bulk_delete, pattern=r"^plans:bulk_delete$"),
+        CallbackQueryHandler(cb_plans_bulk_enable, pattern=r"^plans:bulk_enable$"),
+        CallbackQueryHandler(cb_plans_bulk_disable, pattern=r"^plans:bulk_disable$"),
+        CallbackQueryHandler(cb_plans_bulk_price_multiply, pattern=r"^plans:bulk_price_multiply$"),
+        CallbackQueryHandler(cb_plans_bulk_price_divide, pattern=r"^plans:bulk_price_divide$"),
+        CallbackQueryHandler(cb_discount_add, pattern=r"^discount:add$"),
+        CallbackQueryHandler(cb_offer_add, pattern=r"^offer:add$"),
         CallbackQueryHandler(cb_sub_create, pattern=r"^sub:create$"),
         CallbackQueryHandler(cb_admin_add, pattern=r"^admin:add$"),
         CallbackQueryHandler(cb_users_search_prompt, pattern=r"^users:search$"),
@@ -2455,7 +2990,10 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_trial_expire, pattern=r"^set:trial_expire$"),
         CallbackQueryHandler(cb_set_trial_nodes, pattern=r"^set:trial_nodes$"),
         CallbackQueryHandler(cb_set_trial_note, pattern=r"^set:trial_note$"),
+        CallbackQueryHandler(cb_set_trial_disabled_msg, pattern=r"^set:trial_disabled_msg$"),
+        CallbackQueryHandler(cb_set_trial_max_claims, pattern=r"^set:trial_max_claims$"),
         CallbackQueryHandler(cb_set_paid_note, pattern=r"^set:paid_note$"),
+        CallbackQueryHandler(cb_set_start_msg, pattern=r"^set:start_msg$"),
         CallbackQueryHandler(cb_sub_bulk_note_start, pattern=r"^subs:bulk_note$"),
         CallbackQueryHandler(cb_curr_edit_rate, pattern=r"^curr:edit_rate:"),
         CallbackQueryHandler(cb_reject_order, pattern=r"^order:reject:"),
@@ -2476,6 +3014,7 @@ def get_handlers():
         CallbackQueryHandler(cb_sub_stats, pattern=r"^sub:stats:"),
         CallbackQueryHandler(cb_sub_configs, pattern=r"^sub:configs:"),
         CallbackQueryHandler(cb_sub_delete, pattern=r"^adm:sub:delete:"),
+        CallbackQueryHandler(cb_sub_reset_traffic, pattern=r"^adm:sub:reset_traffic:"),
         CallbackQueryHandler(cb_subs_page, pattern=r"^subs_page:"),
         CallbackQueryHandler(cb_adm_users, pattern=r"^adm:users$"),
         CallbackQueryHandler(cb_user_detail, pattern=r"^user:detail:"),
@@ -2511,4 +3050,14 @@ def get_handlers():
         CallbackQueryHandler(cb_set_trial, pattern=r"^set:trial$"),
         CallbackQueryHandler(cb_trial_toggle, pattern=r"^set:trial_toggle$"),
         CallbackQueryHandler(cb_adm_update, pattern=r"^adm:update$"),
+        CallbackQueryHandler(cb_force_join_remove, pattern=r"^set:force_join_remove:\d+$"),
+        CallbackQueryHandler(cb_trial_reset_claims, pattern=r"^set:trial_reset_claims$"),
+        CallbackQueryHandler(cb_adm_discounts, pattern=r"^adm:discounts$"),
+        CallbackQueryHandler(cb_discount_toggle, pattern=r"^discount:toggle:"),
+        CallbackQueryHandler(cb_discount_delete, pattern=r"^discount:delete:"),
+        CallbackQueryHandler(cb_adm_offers, pattern=r"^adm:offers$"),
+        CallbackQueryHandler(cb_offer_toggle, pattern=r"^offer:toggle:"),
+        CallbackQueryHandler(cb_offer_delete, pattern=r"^offer:delete:"),
+        CallbackQueryHandler(cb_adm_logs, pattern=r"^adm:logs$"),
+        CallbackQueryHandler(cb_adm_logs_page, pattern=r"^adm:logs_page:"),
     ]

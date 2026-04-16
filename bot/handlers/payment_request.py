@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime, timezone
+from decimal import Decimal
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, ConversationHandler, filters
 import core.db as db
@@ -22,7 +23,17 @@ async def cb_buy_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not plan:
         await query.edit_message_text(t("order_not_found"))
         return ConversationHandler.END
-    amount, code, decimals = await price_for_method(plan["price"], "request")
+    discount_pct = ctx.user_data.get(f"discount_pct:{plan_id}", 0)
+    if not discount_pct:
+        offer = await db.get_active_offer_for_plan(plan_id)
+        if offer:
+            discount_pct = offer["discount_percent"]
+    effective_price = float(Decimal(str(plan["price"]))*(1-Decimal(str(discount_pct))/100)) if discount_pct else plan["price"]
+    discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
+    ctx.user_data.pop(f"discount_pct:{plan_id}", None)
+    if discount_code_used:
+        await db.use_discount_code(discount_code_used)
+    amount, code, decimals = await price_for_method(effective_price, "request")
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
     order_id = await db.create_order(uid, plan_id, "request", float(amount), code)

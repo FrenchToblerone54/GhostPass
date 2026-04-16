@@ -26,6 +26,13 @@ def _migrate_v1(db):
     db.execute("PRAGMA user_version=1")
     db.commit()
 
+def _migrate_v2(db):
+    db.execute("CREATE TABLE IF NOT EXISTS discount_codes (code TEXT PRIMARY KEY, discount_percent REAL NOT NULL, max_uses INTEGER DEFAULT 0, uses INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')))")
+    db.execute("CREATE TABLE IF NOT EXISTS offers (id TEXT PRIMARY KEY, name TEXT NOT NULL, discount_percent REAL NOT NULL, plan_ids TEXT NOT NULL DEFAULT '[]', is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')))")
+    db.execute("CREATE TABLE IF NOT EXISTS admin_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, admin_id INTEGER NOT NULL, action TEXT NOT NULL, details TEXT, created_at TEXT DEFAULT (datetime('now')))")
+    db.execute("PRAGMA user_version=2")
+    db.commit()
+
 async def init_db():
     def _sync():
         with _open() as db:
@@ -34,6 +41,8 @@ async def init_db():
             existing_tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
             if version<1 or not required_tables.issubset(existing_tables):
                 _migrate_v1(db)
+            if version<2:
+                _migrate_v2(db)
     await asyncio.to_thread(_sync)
 
 async def upsert_user(telegram_id, username, first_name):
@@ -333,9 +342,146 @@ async def nullify_ghostgate_sub_id(sub_id):
             db.commit()
     await asyncio.to_thread(_sync)
 
+async def create_offer(name, discount_percent, plan_ids):
+    def _sync():
+        with _open() as db:
+            oid=generate(size=20)
+            db.execute("INSERT INTO offers (id, name, discount_percent, plan_ids) VALUES (?,?,?,?)", (oid, name, discount_percent, json.dumps(plan_ids)))
+            db.commit()
+            return oid
+    return await asyncio.to_thread(_sync)
+
+async def list_offers():
+    def _sync():
+        with _open() as db:
+            rows=db.execute("SELECT * FROM offers ORDER BY created_at DESC").fetchall()
+            result=[]
+            for r in rows:
+                d=dict(r)
+                d["plan_ids"]=json.loads(d["plan_ids"])
+                result.append(d)
+            return result
+    return await asyncio.to_thread(_sync)
+
+async def get_offer(offer_id):
+    def _sync():
+        with _open() as db:
+            row=db.execute("SELECT * FROM offers WHERE id=?", (offer_id,)).fetchone()
+            if not row:
+                return None
+            d=dict(row)
+            d["plan_ids"]=json.loads(d["plan_ids"])
+            return d
+    return await asyncio.to_thread(_sync)
+
+async def toggle_offer(offer_id):
+    def _sync():
+        with _open() as db:
+            db.execute("UPDATE offers SET is_active=1-is_active WHERE id=?", (offer_id,))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
+async def delete_offer(offer_id):
+    def _sync():
+        with _open() as db:
+            db.execute("DELETE FROM offers WHERE id=?", (offer_id,))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
+async def get_active_offer_for_plan(plan_id):
+    def _sync():
+        with _open() as db:
+            rows=db.execute("SELECT * FROM offers WHERE is_active=1").fetchall()
+            for r in rows:
+                d=dict(r)
+                ids=json.loads(d["plan_ids"])
+                if not ids or plan_id in ids:
+                    return {**d, "plan_ids": ids}
+            return None
+    return await asyncio.to_thread(_sync)
+
+async def create_discount_code(code, discount_percent, max_uses=0):
+    def _sync():
+        with _open() as db:
+            db.execute("INSERT INTO discount_codes (code, discount_percent, max_uses) VALUES (?,?,?)", (code.upper(), discount_percent, max_uses))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
+async def get_discount_code(code):
+    def _sync():
+        with _open() as db:
+            row=db.execute("SELECT * FROM discount_codes WHERE code=?", (code.upper(),)).fetchone()
+            return dict(row) if row else None
+    return await asyncio.to_thread(_sync)
+
+async def use_discount_code(code):
+    def _sync():
+        with _open() as db:
+            db.execute("UPDATE discount_codes SET uses=uses+1 WHERE code=?", (code.upper(),))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
+async def list_discount_codes():
+    def _sync():
+        with _open() as db:
+            rows=db.execute("SELECT * FROM discount_codes ORDER BY created_at DESC").fetchall()
+            return [dict(r) for r in rows]
+    return await asyncio.to_thread(_sync)
+
+async def delete_discount_code(code):
+    def _sync():
+        with _open() as db:
+            db.execute("DELETE FROM discount_codes WHERE code=?", (code.upper(),))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
+async def toggle_discount_code(code):
+    def _sync():
+        with _open() as db:
+            db.execute("UPDATE discount_codes SET is_active=1-is_active WHERE code=?", (code.upper(),))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
+async def list_trial_claims():
+    def _sync():
+        with _open() as db:
+            rows=db.execute("SELECT * FROM trial_claims").fetchall()
+            return [dict(r) for r in rows]
+    return await asyncio.to_thread(_sync)
+
+async def count_trial_claims():
+    def _sync():
+        with _open() as db:
+            return db.execute("SELECT COUNT(*) FROM trial_claims").fetchone()[0]
+    return await asyncio.to_thread(_sync)
+
+async def reset_trial_claims():
+    def _sync():
+        with _open() as db:
+            count=db.execute("SELECT COUNT(*) FROM trial_claims").fetchone()[0]
+            db.execute("DELETE FROM trial_claims")
+            db.commit()
+            return count
+    return await asyncio.to_thread(_sync)
+
 async def get_orders_by_invoice(invoice_id):
     def _sync():
         with _open() as db:
             row = db.execute("SELECT * FROM orders WHERE cryptomus_invoice_id=?", (invoice_id,)).fetchone()
             return dict(row) if row else None
+    return await asyncio.to_thread(_sync)
+
+async def log_admin_action(admin_id, action, details=None):
+    def _sync():
+        with _open() as db:
+            db.execute("INSERT INTO admin_logs (admin_id, action, details) VALUES (?,?,?)", (admin_id, action, details))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
+async def list_admin_logs(offset=0, limit=20):
+    def _sync():
+        with _open() as db:
+            rows = db.execute("SELECT * FROM admin_logs ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+            total = db.execute("SELECT COUNT(*) FROM admin_logs").fetchone()[0]
+            return [dict(r) for r in rows], total
     return await asyncio.to_thread(_sync)

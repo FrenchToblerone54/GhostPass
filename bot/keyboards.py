@@ -22,7 +22,8 @@ def main_admin_kb():
         [InlineKeyboardButton(t("btn_adm_subs"), callback_data="adm:subs"), InlineKeyboardButton(t("btn_adm_plans"), callback_data="adm:plans")],
         [InlineKeyboardButton(t("btn_adm_users"), callback_data="adm:users"), InlineKeyboardButton(t("btn_adm_admins"), callback_data="adm:admins")],
         [InlineKeyboardButton(t("btn_adm_orders"), callback_data="adm:orders"), InlineKeyboardButton(t("btn_adm_settings"), callback_data="adm:settings")],
-        [InlineKeyboardButton(t("btn_adm_update"), callback_data="adm:update")],
+        [InlineKeyboardButton(t("btn_adm_discounts"), callback_data="adm:discounts"), InlineKeyboardButton(t("btn_adm_offers"), callback_data="adm:offers")],
+        [InlineKeyboardButton(t("btn_adm_logs"), callback_data="adm:logs"), InlineKeyboardButton(t("btn_adm_update"), callback_data="adm:update")],
     ])
 
 def back_kb(target):
@@ -34,7 +35,7 @@ def confirm_reject_kb(order_id):
         InlineKeyboardButton(t("btn_reject"), callback_data=f"order:reject:{order_id}"),
     ]])
 
-def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled):
+def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled, discount_pct=0):
     rows = []
     if card_enabled:
         rows.append([InlineKeyboardButton(t("btn_pay_card"), callback_data=f"buy:card:{plan_id}")])
@@ -44,6 +45,8 @@ def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_
         rows.append([InlineKeyboardButton(t("btn_request_sub"), callback_data=f"buy:request:{plan_id}")])
     if manual_enabled:
         rows.append([InlineKeyboardButton(t("btn_pay_manual"), callback_data=f"buy:manual:{plan_id}")])
+    code_label = f"🏷️ Code Applied ({discount_pct}% off)" if discount_pct else "🏷️ Use Discount Code"
+    rows.append([InlineKeyboardButton(code_label, callback_data=f"buy:discount:{plan_id}")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="consumer:plans")])
     return InlineKeyboardMarkup(rows)
 
@@ -70,6 +73,7 @@ def settings_kb():
         [InlineKeyboardButton(t("btn_set_usdt"), callback_data="set:usdt")],
         [InlineKeyboardButton(t("btn_set_trial"), callback_data="set:trial")],
         [InlineKeyboardButton(t("btn_set_paid_note"), callback_data="set:paid_note")],
+        [InlineKeyboardButton(t("btn_set_start_msg"), callback_data="set:start_msg")],
         [InlineKeyboardButton(t("btn_set_sync"), callback_data="set:sync")],
         [InlineKeyboardButton(t("btn_set_plans_pagination"), callback_data="set:plan_pagination")],
         [InlineKeyboardButton(t("btn_set_force_join"), callback_data="set:force_join")],
@@ -125,6 +129,7 @@ def sub_detail_kb(sub_id, enabled):
     toggle_label = t("btn_sub_disable") if enabled else t("btn_sub_enable")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t("btn_regen_link"), callback_data=f"sub:regen:{sub_id}"), InlineKeyboardButton(toggle_label, callback_data=f"sub:toggle:{sub_id}")],
+        [InlineKeyboardButton(t("btn_sub_configs"), callback_data=f"sub:configs_user:{sub_id}")],
         [InlineKeyboardButton(t("btn_delete"), callback_data=f"sub:delete:{sub_id}")],
         [InlineKeyboardButton(t("btn_back"), callback_data="sub:list")],
     ])
@@ -132,6 +137,7 @@ def sub_detail_kb(sub_id, enabled):
 def sub_actions_kb(sub_id, back_cb):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t("btn_sub_stats"), callback_data=f"sub:stats:{sub_id}"), InlineKeyboardButton(t("btn_sub_configs"), callback_data=f"sub:configs:{sub_id}")],
+        [InlineKeyboardButton(t("btn_sub_reset_traffic"), callback_data=f"adm:sub:reset_traffic:{sub_id}")],
         [InlineKeyboardButton(t("btn_delete"), callback_data=f"adm:sub:delete:{sub_id}")],
         [InlineKeyboardButton(t("btn_back"), callback_data=back_cb)],
     ])
@@ -173,6 +179,18 @@ def curr_detail_kb(code, is_base, back_cb):
 def base_select_kb(currencies, back_cb):
     rows = [[InlineKeyboardButton(f"{c['code']} — {c['name']}", callback_data=f"curr:make_base:{c['code']}")] for c in currencies]
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data=back_cb)])
+    return InlineKeyboardMarkup(rows)
+
+def logs_kb(page, total, per_page):
+    nav = []
+    if page>0:
+        nav.append(InlineKeyboardButton("◀️", callback_data="adm:logs_page:prev"))
+    if (page+1)*per_page<total:
+        nav.append(InlineKeyboardButton("▶️", callback_data="adm:logs_page:next"))
+    rows = []
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     return InlineKeyboardMarkup(rows)
 
 def subs_bulk_note_kb(page_subs, selected_ids, page, total, per_page):
