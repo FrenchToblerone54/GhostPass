@@ -2295,7 +2295,9 @@ async def cb_set_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     enabled = await db.get_setting("trial_enabled", "0")=="1"
     data_gb = await db.get_setting("trial_data_gb", "0.5")
-    expire_h = int(await db.get_setting("trial_expire_seconds", "86400"))//3600
+    expire_s_raw = int(await db.get_setting("trial_expire_seconds", "86400"))
+    expire_h_val = expire_s_raw/3600
+    expire_h = str(int(expire_h_val)) if expire_h_val==int(expire_h_val) else f"{expire_h_val:.1f}"
     node_ids = json.loads(await db.get_setting("trial_node_ids", "[]"))
     start_after_use = await db.get_setting("trial_start_after_use", "1")=="1"
     max_claims = await db.get_setting("trial_max_claims", "0")
@@ -2351,13 +2353,13 @@ async def cb_set_trial_expire(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def settings_trial_expire(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     try:
-        hours = int(update.message.text.strip())
+        hours = float(update.message.text.strip())
         if hours<=0:
             raise ValueError
     except ValueError:
         await update.message.reply_text(t("invalid_input"))
         return SETTINGS_TRIAL_EXPIRE
-    await db.set_setting("trial_expire_seconds", str(hours*3600))
+    await db.set_setting("trial_expire_seconds", str(int(hours*3600)))
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
     return ConversationHandler.END
 
@@ -2610,27 +2612,6 @@ async def cb_adm_offers(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     await query.edit_message_text(t("adm_offers_title", list=list_text), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
-_LOGS_PER_PAGE = 10
-
-async def cb_adm_logs(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    page = ctx.user_data.get("logs_page", 0)
-    logs, total = await db.list_admin_logs(offset=page*_LOGS_PER_PAGE, limit=_LOGS_PER_PAGE)
-    if logs:
-        lines = [t("adm_log_entry", created_at=lg["created_at"][:16], admin_id=lg["admin_id"], action=lg["action"], details=f" — {lg['details']}" if lg["details"] else "") for lg in logs]
-        entries = "\n".join(lines)
-    else:
-        entries = t("adm_logs_empty")
-    await query.edit_message_text(t("adm_logs_title", entries=entries), reply_markup=logs_kb(page, total, _LOGS_PER_PAGE), parse_mode="Markdown")
-
-async def cb_logs_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    direction = query.data.split(":", 2)[2]
-    page = ctx.user_data.get("logs_page", 0)
-    ctx.user_data["logs_page"] = max(0, page-1) if direction=="prev" else page+1
-    await cb_adm_logs(update, ctx)
 
 async def cb_offer_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _is_admin(update.effective_user.id):

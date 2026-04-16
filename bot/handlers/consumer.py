@@ -9,7 +9,7 @@ from core.currency import get_base_currency, fmt_price_for_method, price_for_met
 from decimal import Decimal
 from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb, subs_list_kb, sub_detail_kb
 from bot.strings import t
-from bot.guards import ensure_force_join
+from bot.guards import ensure_force_join, check_force_join
 from bot.states import CONSUMER_DISCOUNT_INPUT
 from config import settings
 
@@ -42,9 +42,8 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     if not await ensure_force_join(update, ctx):
         return
-    show_trial = await db.get_setting("trial_enabled", "0")=="1" and not await db.has_trial_claim(uid)
     welcome_text = await db.get_setting("start_msg", "") or t("welcome")
-    await update.message.reply_text(welcome_text, reply_markup=main_consumer_kb(show_trial))
+    await update.message.reply_text(welcome_text, reply_markup=main_consumer_kb())
 
 async def cmd_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _ensure_user(update)
@@ -344,9 +343,13 @@ async def cmd_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t("trial_already_claimed"))
         return
     data_gb = await db.get_setting("trial_data_gb", "0.5")
-    expire_h = int(await db.get_setting("trial_expire_seconds", "86400"))//3600
+    expire_s_val = int(await db.get_setting("trial_expire_seconds", "86400"))
+    expire_h_val = expire_s_val/3600
+    expire_h = str(int(expire_h_val)) if expire_h_val==int(expire_h_val) else f"{expire_h_val:.1f}"
+    trial_start_after_use = await db.get_setting("trial_start_after_use", "1")
+    start_text = t("trial_start_from_connection") if trial_start_after_use=="1" else t("trial_start_from_get")
     await update.message.reply_text(
-        t("trial_info", data_gb=data_gb, expire_h=expire_h),
+        t("trial_info", data_gb=data_gb, expire_h=expire_h, start_text=start_text),
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton(t("btn_trial_claim"), callback_data="trial:claim")],
             [InlineKeyboardButton(t("btn_back"), callback_data="trial:back")],
@@ -387,10 +390,11 @@ async def cb_trial_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("service_unavailable"))
         return
     await db.create_trial_claim(uid, result["id"])
+    claim_start_text = t("trial_start_from_connection") if trial_start_after_use=="1" else t("trial_start_from_get")
     await ctx.bot.send_message(
         chat_id=query.from_user.id,
-        text=t("trial_claimed", url=result.get("url", "")),
-        reply_markup=main_consumer_kb(show_trial=False),
+        text=t("trial_claimed", url=result.get("url", ""), start_text=claim_start_text),
+        reply_markup=main_consumer_kb(),
         parse_mode="Markdown"
     )
     await query.delete_message()
@@ -410,6 +414,25 @@ async def handle_menu_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_support(update, ctx)
     elif text==t("btn_consumer_trial"):
         await cmd_trial(update, ctx)
+
+async def cb_force_join_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    uid = update.effective_user.id
+    if await _check_banned(update):
+        await query.answer(t("banned"), show_alert=True)
+        return
+    joined = await check_force_join(ctx.bot, uid)
+    if not joined:
+        await query.answer(t("force_join_alert"), show_alert=True)
+        return
+    await query.answer()
+    try:
+        await query.delete_message()
+    except Exception:
+        pass
+    db_uid = await _ensure_user(update)
+    welcome_text = await db.get_setting("start_msg", "") or t("welcome")
+    await ctx.bot.send_message(chat_id=uid, text=welcome_text, reply_markup=main_consumer_kb())
 
 async def cb_sub_configs_user(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -487,4 +510,5 @@ def get_handlers():
         CallbackQueryHandler(cb_regen_cancel, pattern=r"^sub:regen_no:"),
         CallbackQueryHandler(cb_toggle_sub, pattern=r"^sub:toggle:"),
         CallbackQueryHandler(cb_sub_configs_user, pattern=r"^sub:configs_user:"),
+        CallbackQueryHandler(cb_force_join_check, pattern=r"^force_join:check$"),
     ]

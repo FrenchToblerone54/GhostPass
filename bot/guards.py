@@ -23,6 +23,23 @@ async def _get_force_join_channels():
     single=(await db.get_setting("force_join_channel", "") or "").strip()
     return [single] if single else []
 
+async def check_force_join(bot, uid):
+    enabled=await db.get_setting("force_join_enabled", "0")
+    if enabled!="1":
+        return True
+    channels=await _get_force_join_channels()
+    if not channels:
+        return True
+    for channel in channels:
+        try:
+            m=await bot.get_chat_member(channel, uid)
+            if m.status in ("member", "administrator", "creator"):
+                continue
+        except Exception:
+            pass
+        return False
+    return True
+
 async def ensure_force_join(update, ctx):
     enabled=await db.get_setting("force_join_enabled", "0")
     if enabled!="1":
@@ -45,7 +62,8 @@ async def ensure_force_join(update, ctx):
     if not not_joined:
         return True
     buttons=[[InlineKeyboardButton(f"{t('btn_join_channel')} {ch}", url=u)] for ch in not_joined if (u:=_join_url(ch))]
-    kb=InlineKeyboardMarkup(buttons) if buttons else None
+    buttons.append([InlineKeyboardButton(t("btn_i_have_joined"), callback_data="force_join:check")])
+    kb=InlineKeyboardMarkup(buttons)
     msg=t("force_join_required", channel=", ".join(not_joined))
     if update.callback_query:
         await update.callback_query.answer(t("force_join_alert"), show_alert=True)

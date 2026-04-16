@@ -11,11 +11,8 @@ def _fmt_plan_price(price, base_currency):
             pass
     return str(price)
 
-def main_consumer_kb(show_trial=False):
-    rows = [[t("btn_consumer_plans"), t("btn_consumer_status")], [t("btn_consumer_support")]]
-    if show_trial:
-        rows.insert(0, [t("btn_consumer_trial")])
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True)
+def main_consumer_kb():
+    return ReplyKeyboardMarkup([[t("btn_consumer_trial")], [t("btn_consumer_plans"), t("btn_consumer_status")], [t("btn_consumer_support")]], resize_keyboard=True)
 
 def main_admin_kb():
     return InlineKeyboardMarkup([
