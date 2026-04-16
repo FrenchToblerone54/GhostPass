@@ -33,6 +33,14 @@ def _migrate_v2(db):
     db.execute("PRAGMA user_version=2")
     db.commit()
 
+def _migrate_v3(db):
+    db.execute("ALTER TABLE orders RENAME TO orders_old")
+    db.execute("CREATE TABLE orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), plan_id TEXT REFERENCES plans(id), ghostgate_sub_id TEXT, payment_method TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', amount REAL NOT NULL, currency TEXT NOT NULL, cryptomus_invoice_id TEXT, receipt_file_id TEXT, created_at TEXT DEFAULT (datetime('now')), paid_at TEXT)")
+    db.execute("INSERT INTO orders SELECT * FROM orders_old")
+    db.execute("DROP TABLE orders_old")
+    db.execute("PRAGMA user_version=3")
+    db.commit()
+
 async def init_db():
     def _sync():
         with _open() as db:
@@ -43,6 +51,8 @@ async def init_db():
                 _migrate_v1(db)
             if version<2:
                 _migrate_v2(db)
+            if version<3:
+                _migrate_v3(db)
     await asyncio.to_thread(_sync)
 
 async def upsert_user(telegram_id, username, first_name):
@@ -152,6 +162,7 @@ async def update_plan(plan_id, **kwargs):
 async def delete_plan(plan_id):
     def _sync():
         with _open() as db:
+            db.execute("UPDATE orders SET plan_id=NULL WHERE plan_id=?", (plan_id,))
             db.execute("DELETE FROM plans WHERE id=?", (plan_id,))
             db.commit()
     await asyncio.to_thread(_sync)
@@ -191,7 +202,7 @@ async def get_user_paid_orders(user_id):
     def _sync():
         with _open() as db:
             rows = db.execute(
-                "SELECT o.*, p.name as plan_name, p.data_gb, p.days FROM orders o JOIN plans p ON o.plan_id=p.id WHERE o.user_id=? AND o.status='paid' ORDER BY o.paid_at DESC",
+                "SELECT o.*, p.name as plan_name, p.data_gb, p.days FROM orders o LEFT JOIN plans p ON o.plan_id=p.id WHERE o.user_id=? AND o.status='paid' ORDER BY o.paid_at DESC",
                 (user_id,)
             ).fetchall()
             return [dict(r) for r in rows]
@@ -201,7 +212,7 @@ async def get_pending_orders():
     def _sync():
         with _open() as db:
             rows = db.execute(
-                "SELECT o.*, u.first_name, u.username, u.telegram_id, p.name as plan_name FROM orders o JOIN users u ON o.user_id=u.id JOIN plans p ON o.plan_id=p.id WHERE o.status IN ('pending','waiting_confirm') ORDER BY o.created_at"
+                "SELECT o.*, u.first_name, u.username, u.telegram_id, p.name as plan_name FROM orders o JOIN users u ON o.user_id=u.id LEFT JOIN plans p ON o.plan_id=p.id WHERE o.status IN ('pending','waiting_confirm') ORDER BY o.created_at"
             ).fetchall()
             return [dict(r) for r in rows]
     return await asyncio.to_thread(_sync)
@@ -211,13 +222,13 @@ async def list_orders(status=None, offset=0, limit=20):
         with _open() as db:
             if status:
                 rows = db.execute(
-                    "SELECT o.*, u.first_name, u.username, u.telegram_id, p.name as plan_name FROM orders o JOIN users u ON o.user_id=u.id JOIN plans p ON o.plan_id=p.id WHERE o.status=? ORDER BY o.created_at DESC LIMIT ? OFFSET ?",
+                    "SELECT o.*, u.first_name, u.username, u.telegram_id, p.name as plan_name FROM orders o JOIN users u ON o.user_id=u.id LEFT JOIN plans p ON o.plan_id=p.id WHERE o.status=? ORDER BY o.created_at DESC LIMIT ? OFFSET ?",
                     (status, limit, offset)
                 ).fetchall()
                 total = db.execute("SELECT COUNT(*) FROM orders WHERE status=?", (status,)).fetchone()[0]
             else:
                 rows = db.execute(
-                    "SELECT o.*, u.first_name, u.username, u.telegram_id, p.name as plan_name FROM orders o JOIN users u ON o.user_id=u.id JOIN plans p ON o.plan_id=p.id ORDER BY o.created_at DESC LIMIT ? OFFSET ?",
+                    "SELECT o.*, u.first_name, u.username, u.telegram_id, p.name as plan_name FROM orders o JOIN users u ON o.user_id=u.id LEFT JOIN plans p ON o.plan_id=p.id ORDER BY o.created_at DESC LIMIT ? OFFSET ?",
                     (limit, offset)
                 ).fetchall()
                 total = db.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
@@ -237,7 +248,7 @@ async def get_orders_by_user(user_id):
     def _sync():
         with _open() as db:
             rows = db.execute(
-                "SELECT o.*, p.name as plan_name FROM orders o JOIN plans p ON o.plan_id=p.id WHERE o.user_id=? ORDER BY o.created_at DESC",
+                "SELECT o.*, p.name as plan_name FROM orders o LEFT JOIN plans p ON o.plan_id=p.id WHERE o.user_id=? ORDER BY o.created_at DESC",
                 (user_id,)
             ).fetchall()
             return [dict(r) for r in rows]
