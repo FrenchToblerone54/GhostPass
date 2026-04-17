@@ -541,6 +541,13 @@ async def get_referral_package(pkg_id):
             return d
     return await asyncio.to_thread(_sync)
 
+async def update_referral_package(pkg_id, node_ids):
+    def _sync():
+        with _open() as db:
+            db.execute("UPDATE referral_packages SET node_ids=? WHERE id=?", (json.dumps(node_ids), pkg_id))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
 async def toggle_referral_package(pkg_id):
     def _sync():
         with _open() as db:

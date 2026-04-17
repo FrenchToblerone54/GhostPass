@@ -381,6 +381,8 @@ _EN = {
     "adm_referral_pkg_deleted": "🗑️ Referral package deleted.",
     "btn_set_referral": "👥 Referral System",
     "adm_referral_pkg_detail": "🎁 *{name}*\n\n💾 Data: {data_text}\n📅 Duration: {days_text}\n📱 IP Limit: {ip_text}\n⭐ Credits required: {credits}\nStatus: {status}",
+    "adm_referral_bulk_nodes_select_pkgs_prompt": "Select referral packages for node update:",
+    "adm_referral_pkg_nodes_bulk_done": "✅ Nodes updated for {count} packages.",
 }
 
 _FA = {
@@ -764,6 +766,8 @@ _FA = {
     "adm_referral_pkg_deleted": "🗑️ بسته دعوتی حذف شد.",
     "btn_set_referral": "👥 سیستم دعوت",
     "adm_referral_pkg_detail": "🎁 *{name}*\n\n💾 حجم: {data_text}\n📅 مدت: {days_text}\n📱 محدودیت IP: {ip_text}\n⭐ اعتبار لازم: {credits}\nوضعیت: {status}",
+    "adm_referral_bulk_nodes_select_pkgs_prompt": "بسته‌های دعوتی که نودهایشان باید تغییر کند را انتخاب کنید:",
+    "adm_referral_pkg_nodes_bulk_done": "✅ نودها برای {count} بسته بروزرسانی شد.",
 }
 
 def t(key, **kwargs):

@@ -51,7 +51,8 @@ from bot.states import (
     OFFER_CREATE_NAME, OFFER_CREATE_DISCOUNT, OFFER_CREATE_PLANS,
     SETTINGS_START_MSG,
     REF_PKG_CREATE_NAME, REF_PKG_CREATE_CREDITS, REF_PKG_CREATE_DATA,
-    REF_PKG_CREATE_DAYS, REF_PKG_CREATE_IP, REF_PKG_CREATE_NODES
+    REF_PKG_CREATE_DAYS, REF_PKG_CREATE_IP, REF_PKG_CREATE_NODES,
+    REF_PKG_EDIT_NODES, REF_PKG_BULK_NODES_PKGS, REF_PKG_BULK_NODES
 )
 from config import settings
 
@@ -2942,6 +2943,184 @@ async def cb_ref_pkg_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await db.delete_referral_package(pkg_id)
     await query.edit_message_text(t("adm_referral_pkg_deleted"), reply_markup=back_kb("set:referral"))
 
+def _ref_pkg_select_kb(pkgs, selected_ids, done_cb, back_cb, all_cb, none_cb):
+    rows=[]
+    for p in pkgs:
+        mark="✅" if p["id"] in selected_ids else "⬜"
+        rows.append([InlineKeyboardButton(f"{mark} {p['name']}", callback_data=f"ref_pkg_select:{p['id']}")])
+    rows.append([InlineKeyboardButton(t("btn_select_all"), callback_data=all_cb), InlineKeyboardButton(t("btn_unselect_all"), callback_data=none_cb)])
+    rows.append([InlineKeyboardButton(t("btn_done"), callback_data=done_cb), InlineKeyboardButton(t("btn_back"), callback_data=back_cb)])
+    return InlineKeyboardMarkup(rows)
+
+async def cb_ref_pkg_edit_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    pkg_id=query.data.split(":", 3)[3]
+    pkg=await db.get_referral_package(pkg_id)
+    if not pkg:
+        await query.edit_message_text(t("order_not_found"))
+        return ConversationHandler.END
+    nodes=await gg.list_nodes()
+    if not nodes:
+        await query.edit_message_text(t("ghostgate_error"))
+        return ConversationHandler.END
+    selected=list(pkg.get("node_ids", []))
+    ctx.user_data["editing_ref_pkg_nodes_id"]=pkg_id
+    ctx.user_data["editing_ref_pkg_nodes"]=selected
+    await query.edit_message_text(t("adm_referral_pkg_nodes_prompt"), reply_markup=node_select_kb(nodes, selected, "ref_pkg:edit_nodes_done", f"ref_pkg:detail:{pkg_id}", "ref_pkg:edit_nodes_all", "ref_pkg:edit_nodes_none"))
+    return REF_PKG_EDIT_NODES
+
+async def ref_pkg_edit_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    node_id=int(query.data.split(":", 1)[1])
+    selected=ctx.user_data.get("editing_ref_pkg_nodes", [])
+    if node_id in selected:
+        selected.remove(node_id)
+    else:
+        selected.append(node_id)
+    ctx.user_data["editing_ref_pkg_nodes"]=selected
+    nodes=await gg.list_nodes()
+    pkg_id=ctx.user_data.get("editing_ref_pkg_nodes_id", "")
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, selected, "ref_pkg:edit_nodes_done", f"ref_pkg:detail:{pkg_id}", "ref_pkg:edit_nodes_all", "ref_pkg:edit_nodes_none"))
+    return REF_PKG_EDIT_NODES
+
+async def ref_pkg_edit_nodes_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    nodes=await gg.list_nodes()
+    selected=_all_node_ids(nodes)
+    ctx.user_data["editing_ref_pkg_nodes"]=selected
+    pkg_id=ctx.user_data.get("editing_ref_pkg_nodes_id", "")
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, selected, "ref_pkg:edit_nodes_done", f"ref_pkg:detail:{pkg_id}", "ref_pkg:edit_nodes_all", "ref_pkg:edit_nodes_none"))
+    return REF_PKG_EDIT_NODES
+
+async def ref_pkg_edit_nodes_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    nodes=await gg.list_nodes()
+    ctx.user_data["editing_ref_pkg_nodes"]=[]
+    pkg_id=ctx.user_data.get("editing_ref_pkg_nodes_id", "")
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, [], "ref_pkg:edit_nodes_done", f"ref_pkg:detail:{pkg_id}", "ref_pkg:edit_nodes_all", "ref_pkg:edit_nodes_none"))
+    return REF_PKG_EDIT_NODES
+
+async def ref_pkg_edit_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    pkg_id=ctx.user_data.pop("editing_ref_pkg_nodes_id", None)
+    selected=ctx.user_data.pop("editing_ref_pkg_nodes", [])
+    if not pkg_id:
+        return ConversationHandler.END
+    await db.update_referral_package(pkg_id, selected)
+    await query.edit_message_text(t("setting_saved"), reply_markup=back_kb(f"ref_pkg:detail:{pkg_id}"))
+    return ConversationHandler.END
+
+async def cb_ref_pkgs_bulk_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query=update.callback_query
+    await query.answer()
+    pkgs=await db.list_referral_packages(active_only=False)
+    if not pkgs:
+        await query.edit_message_text(t("adm_referral_pkg_none"), reply_markup=back_kb("set:referral"))
+        return ConversationHandler.END
+    ctx.user_data["bulk_node_ref_pkg_ids"]=[]
+    await query.edit_message_text(t("adm_referral_bulk_nodes_select_pkgs_prompt"), reply_markup=_ref_pkg_select_kb(pkgs, [], "ref_pkgs:bulk_nodes_pkgs_done", "set:referral", "ref_pkgs:bulk_nodes_pkgs_all", "ref_pkgs:bulk_nodes_pkgs_none"))
+    return REF_PKG_BULK_NODES_PKGS
+
+async def ref_pkgs_bulk_toggle_pkg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    pkg_id=query.data.split(":", 1)[1]
+    selected=ctx.user_data.get("bulk_node_ref_pkg_ids", [])
+    if pkg_id in selected:
+        selected.remove(pkg_id)
+    else:
+        selected.append(pkg_id)
+    ctx.user_data["bulk_node_ref_pkg_ids"]=selected
+    pkgs=await db.list_referral_packages(active_only=False)
+    await query.edit_message_reply_markup(reply_markup=_ref_pkg_select_kb(pkgs, selected, "ref_pkgs:bulk_nodes_pkgs_done", "set:referral", "ref_pkgs:bulk_nodes_pkgs_all", "ref_pkgs:bulk_nodes_pkgs_none"))
+    return REF_PKG_BULK_NODES_PKGS
+
+async def ref_pkgs_bulk_pkgs_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    pkgs=await db.list_referral_packages(active_only=False)
+    selected=[p["id"] for p in pkgs]
+    ctx.user_data["bulk_node_ref_pkg_ids"]=selected
+    await query.edit_message_reply_markup(reply_markup=_ref_pkg_select_kb(pkgs, selected, "ref_pkgs:bulk_nodes_pkgs_done", "set:referral", "ref_pkgs:bulk_nodes_pkgs_all", "ref_pkgs:bulk_nodes_pkgs_none"))
+    return REF_PKG_BULK_NODES_PKGS
+
+async def ref_pkgs_bulk_pkgs_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    pkgs=await db.list_referral_packages(active_only=False)
+    ctx.user_data["bulk_node_ref_pkg_ids"]=[]
+    await query.edit_message_reply_markup(reply_markup=_ref_pkg_select_kb(pkgs, [], "ref_pkgs:bulk_nodes_pkgs_done", "set:referral", "ref_pkgs:bulk_nodes_pkgs_all", "ref_pkgs:bulk_nodes_pkgs_none"))
+    return REF_PKG_BULK_NODES_PKGS
+
+async def ref_pkgs_bulk_pkgs_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    selected_pkgs=ctx.user_data.get("bulk_node_ref_pkg_ids", [])
+    if not selected_pkgs:
+        await query.answer(t("invalid_input"), show_alert=True)
+        return REF_PKG_BULK_NODES_PKGS
+    nodes=await gg.list_nodes()
+    if not nodes:
+        await query.edit_message_text(t("ghostgate_error"))
+        return ConversationHandler.END
+    ctx.user_data["bulk_ref_pkg_nodes"]=[]
+    await query.edit_message_text(t("adm_plan_nodes_bulk_prompt"), reply_markup=node_select_kb(nodes, [], "ref_pkgs:bulk_nodes_done", "set:referral", "ref_pkgs:bulk_nodes_all", "ref_pkgs:bulk_nodes_none"))
+    return REF_PKG_BULK_NODES
+
+async def ref_pkgs_bulk_toggle_node(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    node_id=int(query.data.split(":", 1)[1])
+    selected=ctx.user_data.get("bulk_ref_pkg_nodes", [])
+    if node_id in selected:
+        selected.remove(node_id)
+    else:
+        selected.append(node_id)
+    ctx.user_data["bulk_ref_pkg_nodes"]=selected
+    nodes=await gg.list_nodes()
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, selected, "ref_pkgs:bulk_nodes_done", "set:referral", "ref_pkgs:bulk_nodes_all", "ref_pkgs:bulk_nodes_none"))
+    return REF_PKG_BULK_NODES
+
+async def ref_pkgs_bulk_nodes_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    nodes=await gg.list_nodes()
+    selected=_all_node_ids(nodes)
+    ctx.user_data["bulk_ref_pkg_nodes"]=selected
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, selected, "ref_pkgs:bulk_nodes_done", "set:referral", "ref_pkgs:bulk_nodes_all", "ref_pkgs:bulk_nodes_none"))
+    return REF_PKG_BULK_NODES
+
+async def ref_pkgs_bulk_nodes_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    nodes=await gg.list_nodes()
+    ctx.user_data["bulk_ref_pkg_nodes"]=[]
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, [], "ref_pkgs:bulk_nodes_done", "set:referral", "ref_pkgs:bulk_nodes_all", "ref_pkgs:bulk_nodes_none"))
+    return REF_PKG_BULK_NODES
+
+async def ref_pkgs_bulk_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    selected=ctx.user_data.pop("bulk_ref_pkg_nodes", [])
+    target_ids=ctx.user_data.pop("bulk_node_ref_pkg_ids", [])
+    pkgs=await db.list_referral_packages(active_only=False)
+    count=0
+    for pkg in pkgs:
+        if pkg["id"] in target_ids:
+            await db.update_referral_package(pkg["id"], selected)
+            count+=1
+    await query.edit_message_text(t("adm_referral_pkg_nodes_bulk_done", count=count), reply_markup=back_kb("set:referral"))
+    return ConversationHandler.END
+
 def get_main_conv_handler():
     states = {
         WIZARD_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_url)],
@@ -3054,6 +3233,24 @@ def get_main_conv_handler():
             CallbackQueryHandler(ref_pkg_nodes_none, pattern=r"^ref_pkg:nodes_none$"),
             CallbackQueryHandler(ref_pkg_nodes_done, pattern=r"^ref_pkg:nodes_done$"),
         ],
+        REF_PKG_EDIT_NODES: [
+            CallbackQueryHandler(ref_pkg_edit_toggle_node, pattern=r"^node_toggle:"),
+            CallbackQueryHandler(ref_pkg_edit_nodes_all, pattern=r"^ref_pkg:edit_nodes_all$"),
+            CallbackQueryHandler(ref_pkg_edit_nodes_none, pattern=r"^ref_pkg:edit_nodes_none$"),
+            CallbackQueryHandler(ref_pkg_edit_nodes_done, pattern=r"^ref_pkg:edit_nodes_done$"),
+        ],
+        REF_PKG_BULK_NODES_PKGS: [
+            CallbackQueryHandler(ref_pkgs_bulk_toggle_pkg, pattern=r"^ref_pkg_select:"),
+            CallbackQueryHandler(ref_pkgs_bulk_pkgs_all, pattern=r"^ref_pkgs:bulk_nodes_pkgs_all$"),
+            CallbackQueryHandler(ref_pkgs_bulk_pkgs_none, pattern=r"^ref_pkgs:bulk_nodes_pkgs_none$"),
+            CallbackQueryHandler(ref_pkgs_bulk_pkgs_done, pattern=r"^ref_pkgs:bulk_nodes_pkgs_done$"),
+        ],
+        REF_PKG_BULK_NODES: [
+            CallbackQueryHandler(ref_pkgs_bulk_toggle_node, pattern=r"^node_toggle:"),
+            CallbackQueryHandler(ref_pkgs_bulk_nodes_all, pattern=r"^ref_pkgs:bulk_nodes_all$"),
+            CallbackQueryHandler(ref_pkgs_bulk_nodes_none, pattern=r"^ref_pkgs:bulk_nodes_none$"),
+            CallbackQueryHandler(ref_pkgs_bulk_nodes_done, pattern=r"^ref_pkgs:bulk_nodes_done$"),
+        ],
         SETTINGS_DISCOUNT_CODE_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_code_input)],
         SETTINGS_DISCOUNT_CODE_PCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_pct_input)],
         SETTINGS_DISCOUNT_CODE_MAXUSES: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_maxuses_input)],
@@ -3136,6 +3333,8 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_curr_edit_rate, pattern=r"^curr:edit_rate:"),
         CallbackQueryHandler(cb_reject_order, pattern=r"^order:reject:"),
         CallbackQueryHandler(cb_ref_pkg_create, pattern=r"^ref_pkg:create$"),
+        CallbackQueryHandler(cb_ref_pkg_edit_nodes, pattern=r"^ref_pkg:edit_nodes:"),
+        CallbackQueryHandler(cb_ref_pkgs_bulk_nodes, pattern=r"^ref_pkgs:bulk_nodes$"),
     ]
     return ConversationHandler(entry_points=entry_points, states=states, fallbacks=[CallbackQueryHandler(cb_cancel_conv, pattern=r"^cancel$")], per_message=False, name="admin_main")
 

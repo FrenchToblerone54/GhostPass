@@ -215,6 +215,7 @@ def referral_settings_kb(enabled, packages):
         status="✅" if p["is_active"] else "❌"
         rows.append([InlineKeyboardButton(f"{status} {p['name']} ({p['credits_required']} cr)", callback_data=f"ref_pkg:detail:{p['id']}")])
     rows.append([InlineKeyboardButton(t("adm_referral_add_pkg"), callback_data="ref_pkg:create")])
+    rows.append([InlineKeyboardButton(t("adm_bulk_nodes_btn"), callback_data="ref_pkgs:bulk_nodes")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")])
     return InlineKeyboardMarkup(rows)
 
@@ -222,6 +223,7 @@ def referral_pkg_admin_kb(pkg_id, is_active):
     toggle_label=t("btn_deactivate") if is_active else t("btn_activate")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(toggle_label, callback_data=f"ref_pkg:toggle:{pkg_id}")],
+        [InlineKeyboardButton(t("btn_edit_nodes"), callback_data=f"ref_pkg:edit_nodes:{pkg_id}")],
         [InlineKeyboardButton(t("btn_delete"), callback_data=f"ref_pkg:delete:{pkg_id}")],
         [InlineKeyboardButton(t("btn_back"), callback_data="set:referral")],
     ])
