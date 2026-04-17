@@ -7,7 +7,7 @@ import core.db as db
 import core.ghostgate as gg
 from core.currency import get_base_currency, fmt_price_for_method, price_for_method, fmt
 from decimal import Decimal
-from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb, subs_list_kb, sub_detail_kb
+from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb, subs_list_kb, sub_detail_kb, referral_panel_kb, referral_packages_kb, referral_pkg_detail_kb, referral_redeem_confirm_kb
 from bot.strings import t
 from bot.guards import ensure_force_join, check_force_join
 from bot.states import CONSUMER_DISCOUNT_INPUT
@@ -35,14 +35,35 @@ async def _check_banned(update):
     user = await db.get_user_by_telegram(update.effective_user.id)
     return user and user.get("is_banned")
 
+async def _process_pending_referral(update_or_none, ctx, uid):
+    referrer_tid=ctx.user_data.pop("pending_referrer_tid", None)
+    if not referrer_tid:
+        return
+    if await db.get_setting("referral_enabled", "0")!="1":
+        return
+    referrer=await db.get_user_by_telegram_safe(referrer_tid)
+    if not referrer or referrer["id"]==uid:
+        return
+    recorded=await db.record_referral(referrer["id"], uid)
+    if recorded:
+        credits=await db.get_referral_credits(referrer["id"])
+        try:
+            await ctx.bot.send_message(chat_id=int(referrer_tid), text=t("referral_credited", available=credits["available"]))
+        except Exception:
+            pass
+
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    uid = await _ensure_user(update)
+    uid=await _ensure_user(update)
     if await _check_banned(update):
         await update.message.reply_text(t("banned"))
         return
+    args=ctx.args or []
+    if args and args[0].startswith("ref_"):
+        ctx.user_data["pending_referrer_tid"]=args[0][4:]
     if not await ensure_force_join(update, ctx):
         return
-    welcome_text = await db.get_setting("start_msg", "") or t("welcome")
+    await _process_pending_referral(update, ctx, uid)
+    welcome_text=await db.get_setting("start_msg", "") or t("welcome")
     await update.message.reply_text(welcome_text, reply_markup=main_consumer_kb())
 
 async def cmd_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -405,6 +426,125 @@ async def cb_trial_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await query.delete_message()
 
+async def cmd_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid=await _ensure_user(update)
+    if await _check_banned(update):
+        return
+    if not await ensure_force_join(update, ctx):
+        return
+    if await db.get_setting("referral_enabled", "0")!="1":
+        await update.message.reply_text(t("referral_disabled"))
+        return
+    credits=await db.get_referral_credits(uid)
+    bot_info=await ctx.bot.get_me()
+    link=f"https://t.me/{bot_info.username}?start=ref_{update.effective_user.id}"
+    await update.message.reply_text(
+        t("referral_panel", link=link, earned=credits["earned"], used=credits["used"], available=credits["available"]),
+        reply_markup=referral_panel_kb(),
+        parse_mode="Markdown"
+    )
+
+async def cb_referral_packages(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    if await db.get_setting("referral_enabled", "0")!="1":
+        await query.edit_message_text(t("referral_disabled"))
+        return
+    uid=await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
+    credits=await db.get_referral_credits(uid)
+    packages=await db.list_referral_packages(active_only=True)
+    if not packages:
+        await query.edit_message_text(t("referral_no_packages"), reply_markup=back_kb("ref:back"))
+        return
+    await query.edit_message_text(t("referral_packages_header"), reply_markup=referral_packages_kb(packages, credits["available"]), parse_mode="Markdown")
+
+async def cb_referral_pkg_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    pkg_id=query.data.split(":", 2)[2]
+    pkg=await db.get_referral_package(pkg_id)
+    if not pkg or not pkg["is_active"]:
+        await query.edit_message_text(t("referral_pkg_unavailable"), reply_markup=back_kb("ref:packages"))
+        return
+    uid=await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
+    credits=await db.get_referral_credits(uid)
+    data_text=t("adm_unlimited") if float(pkg["data_gb"])==0 else f"{pkg['data_gb']} GB"
+    days_text=t("adm_no_expiry") if int(pkg["days"])==0 else f"{pkg['days']}d"
+    ip_text=t("adm_unlimited") if int(pkg["ip_limit"])==0 else str(pkg["ip_limit"])
+    can_redeem=credits["available"]>=pkg["credits_required"]
+    await query.edit_message_text(
+        t("referral_pkg_detail", name=pkg["name"], data_text=data_text, days_text=days_text, ip_text=ip_text, credits=pkg["credits_required"], available=credits["available"]),
+        reply_markup=referral_pkg_detail_kb(pkg_id, can_redeem),
+        parse_mode="Markdown"
+    )
+
+async def cb_referral_redeem(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    pkg_id=query.data.split(":", 2)[2]
+    pkg=await db.get_referral_package(pkg_id)
+    if not pkg or not pkg["is_active"]:
+        await query.edit_message_text(t("referral_pkg_unavailable"), reply_markup=back_kb("ref:packages"))
+        return
+    uid=await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
+    credits=await db.get_referral_credits(uid)
+    if credits["available"]<pkg["credits_required"]:
+        await query.edit_message_text(t("referral_pkg_not_enough", credits=pkg["credits_required"], available=credits["available"]), reply_markup=back_kb("ref:packages"))
+        return
+    await query.edit_message_text(
+        t("referral_pkg_confirm", name=pkg["name"], credits=pkg["credits_required"]),
+        reply_markup=referral_redeem_confirm_kb(pkg_id),
+        parse_mode="Markdown"
+    )
+
+async def cb_referral_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    pkg_id=query.data.split(":", 2)[2]
+    pkg=await db.get_referral_package(pkg_id)
+    if not pkg or not pkg["is_active"]:
+        await query.edit_message_text(t("referral_pkg_unavailable"), reply_markup=back_kb("ref:packages"))
+        return
+    uid=await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
+    credits=await db.get_referral_credits(uid)
+    if credits["available"]<pkg["credits_required"]:
+        await query.edit_message_text(t("referral_pkg_not_enough", credits=pkg["credits_required"], available=credits["available"]), reply_markup=back_kb("ref:packages"))
+        return
+    result=await gg.create_subscription(
+        comment=f"Ref-{query.from_user.id}",
+        data_gb=float(pkg["data_gb"]),
+        days=int(pkg["days"]),
+        ip_limit=int(pkg["ip_limit"]),
+        node_ids=pkg["node_ids"]
+    )
+    if not result or not result.get("id"):
+        await query.edit_message_text(t("referral_redeem_fail"))
+        return
+    await db.redeem_referral_package(uid, pkg_id, pkg["credits_required"], result["id"])
+    await ctx.bot.send_message(
+        chat_id=query.from_user.id,
+        text=t("referral_redeemed", url=result.get("url", "")),
+        reply_markup=main_consumer_kb(),
+        parse_mode="Markdown"
+    )
+    await query.delete_message()
+
+async def cb_referral_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    if await db.get_setting("referral_enabled", "0")!="1":
+        await query.edit_message_text(t("referral_disabled"))
+        return
+    uid=await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
+    credits=await db.get_referral_credits(uid)
+    bot_info=await ctx.bot.get_me()
+    link=f"https://t.me/{bot_info.username}?start=ref_{query.from_user.id}"
+    await query.edit_message_text(
+        t("referral_panel", link=link, earned=credits["earned"], used=credits["used"], available=credits["available"]),
+        reply_markup=referral_panel_kb(),
+        parse_mode="Markdown"
+    )
+
 async def handle_menu_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text==t("btn_consumer_plans"):
@@ -415,6 +555,8 @@ async def handle_menu_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_support(update, ctx)
     elif text==t("btn_consumer_trial"):
         await cmd_trial(update, ctx)
+    elif text==t("btn_consumer_referral"):
+        await cmd_referral(update, ctx)
 
 async def cb_force_join_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -432,6 +574,7 @@ async def cb_force_join_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
     db_uid = await _ensure_user(update)
+    await _process_pending_referral(None, ctx, db_uid)
     welcome_text = await db.get_setting("start_msg", "") or t("welcome")
     await ctx.bot.send_message(chat_id=uid, text=welcome_text, reply_markup=main_consumer_kb())
 
@@ -512,4 +655,9 @@ def get_handlers():
         CallbackQueryHandler(cb_toggle_sub, pattern=r"^sub:toggle:"),
         CallbackQueryHandler(cb_sub_configs_user, pattern=r"^sub:configs_user:"),
         CallbackQueryHandler(cb_force_join_check, pattern=r"^force_join:check$"),
+        CallbackQueryHandler(cb_referral_packages, pattern=r"^ref:packages$"),
+        CallbackQueryHandler(cb_referral_pkg_detail, pattern=r"^ref:pkg:"),
+        CallbackQueryHandler(cb_referral_redeem, pattern=r"^ref:redeem:"),
+        CallbackQueryHandler(cb_referral_confirm, pattern=r"^ref:confirm:"),
+        CallbackQueryHandler(cb_referral_back, pattern=r"^ref:back$"),
     ]

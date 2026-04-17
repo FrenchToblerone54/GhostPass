@@ -12,7 +12,7 @@ def _fmt_plan_price(price, base_currency):
     return str(price)
 
 def main_consumer_kb():
-    return ReplyKeyboardMarkup([[t("btn_consumer_trial")], [t("btn_consumer_plans"), t("btn_consumer_status")], [t("btn_consumer_support")]], resize_keyboard=True)
+    return ReplyKeyboardMarkup([[t("btn_consumer_trial")], [t("btn_consumer_plans"), t("btn_consumer_status")], [t("btn_consumer_referral"), t("btn_consumer_support")]], resize_keyboard=True)
 
 def main_admin_kb():
     return InlineKeyboardMarkup([
@@ -77,6 +77,7 @@ def settings_kb():
         [InlineKeyboardButton(t("btn_set_plan_start_after_use"), callback_data="set:plan_start_after_use")],
         [InlineKeyboardButton(t("btn_set_trial_start_after_use"), callback_data="set:trial_start_after_use")],
         [InlineKeyboardButton(t("btn_set_update_http_proxy"), callback_data="set:update_http_proxy"), InlineKeyboardButton(t("btn_set_update_https_proxy"), callback_data="set:update_https_proxy")],
+        [InlineKeyboardButton(t("btn_set_referral"), callback_data="set:referral")],
         [InlineKeyboardButton(t("btn_back"), callback_data="adm:back")],
     ])
 
@@ -189,6 +190,41 @@ def logs_kb(page, total, per_page):
         rows.append(nav)
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     return InlineKeyboardMarkup(rows)
+
+def referral_panel_kb():
+    return InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_referral_redeem"), callback_data="ref:packages")]])
+
+def referral_packages_kb(packages, available):
+    rows=[[InlineKeyboardButton(t("referral_pkg_item", name=p["name"], credits=p["credits_required"]), callback_data=f"ref:pkg:{p['id']}")] for p in packages]
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="ref:back")])
+    return InlineKeyboardMarkup(rows)
+
+def referral_pkg_detail_kb(pkg_id, can_redeem):
+    rows=[]
+    if can_redeem:
+        rows.append([InlineKeyboardButton(t("btn_referral_redeem"), callback_data=f"ref:redeem:{pkg_id}")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="ref:packages")])
+    return InlineKeyboardMarkup(rows)
+
+def referral_redeem_confirm_kb(pkg_id):
+    return InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_yes"), callback_data=f"ref:confirm:{pkg_id}"), InlineKeyboardButton(t("btn_no"), callback_data=f"ref:pkg:{pkg_id}")]])
+
+def referral_settings_kb(enabled, packages):
+    rows=[[InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:referral_toggle")]]
+    for p in packages:
+        status="✅" if p["is_active"] else "❌"
+        rows.append([InlineKeyboardButton(f"{status} {p['name']} ({p['credits_required']} cr)", callback_data=f"ref_pkg:detail:{p['id']}")])
+    rows.append([InlineKeyboardButton(t("adm_referral_add_pkg"), callback_data="ref_pkg:create")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")])
+    return InlineKeyboardMarkup(rows)
+
+def referral_pkg_admin_kb(pkg_id, is_active):
+    toggle_label=t("btn_deactivate") if is_active else t("btn_activate")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(toggle_label, callback_data=f"ref_pkg:toggle:{pkg_id}")],
+        [InlineKeyboardButton(t("btn_delete"), callback_data=f"ref_pkg:delete:{pkg_id}")],
+        [InlineKeyboardButton(t("btn_back"), callback_data="set:referral")],
+    ])
 
 def subs_bulk_note_kb(page_subs, selected_ids, page, total, per_page):
     rows = []

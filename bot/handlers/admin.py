@@ -20,7 +20,8 @@ from bot.keyboards import (
     main_admin_kb, settings_kb, back_kb, plan_actions_kb,
     user_actions_kb, sub_actions_kb, node_select_kb,
     order_detail_kb, skip_kb, cancel_kb, currencies_kb,
-    method_select_kb, curr_detail_kb, base_select_kb, subs_bulk_note_kb, logs_kb
+    method_select_kb, curr_detail_kb, base_select_kb, subs_bulk_note_kb, logs_kb,
+    referral_settings_kb, referral_pkg_admin_kb
 )
 from bot.strings import t
 from bot.states import (
@@ -48,7 +49,9 @@ from bot.states import (
     SETTINGS_DISCOUNT_CODE_CODE, SETTINGS_DISCOUNT_CODE_PCT, SETTINGS_DISCOUNT_CODE_MAXUSES,
     PLAN_BULK_ENABLE_DISABLE, PLAN_BULK_PRICE_MULTIPLY, PLAN_BULK_PRICE_FACTOR,
     OFFER_CREATE_NAME, OFFER_CREATE_DISCOUNT, OFFER_CREATE_PLANS,
-    SETTINGS_START_MSG
+    SETTINGS_START_MSG,
+    REF_PKG_CREATE_NAME, REF_PKG_CREATE_CREDITS, REF_PKG_CREATE_DATA,
+    REF_PKG_CREATE_DAYS, REF_PKG_CREATE_IP, REF_PKG_CREATE_NODES
 )
 from config import settings
 
@@ -2796,6 +2799,149 @@ async def _show_logs(query, ctx):
         lines = t("adm_logs_empty")
     await query.edit_message_text(t("adm_logs_title", entries=lines), reply_markup=logs_kb(page, total, _LOG_PER_PAGE), parse_mode="Markdown")
 
+async def cb_set_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    enabled = await db.get_setting("referral_enabled", "0")=="1"
+    packages = await db.list_referral_packages()
+    pkg_lines = "\n".join(t("adm_referral_pkg_item", name=p["name"], credits=p["credits_required"], data=p["data_gb"], days=p["days"], ip=p["ip_limit"], status=t("adm_active") if p["is_active"] else t("adm_inactive")) for p in packages) or t("adm_referral_pkg_none")
+    await query.edit_message_text(t("adm_referral_title", status=t("adm_enabled") if enabled else t("adm_disabled"), packages=pkg_lines), reply_markup=referral_settings_kb(enabled, packages), parse_mode="Markdown")
+
+async def cb_referral_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    enabled = await db.get_setting("referral_enabled", "0")=="1"
+    await db.set_setting("referral_enabled", "0" if enabled else "1")
+    await cb_set_referral(update, ctx)
+
+async def cb_ref_pkg_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    ctx.user_data["ref_pkg"] = {}
+    await query.edit_message_text(t("adm_referral_pkg_name_prompt"), reply_markup=cancel_kb())
+    return REF_PKG_CREATE_NAME
+
+async def ref_pkg_name_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data["ref_pkg"]["name"] = update.message.text.strip()
+    await update.message.reply_text(t("adm_referral_pkg_credits_prompt"), reply_markup=cancel_kb())
+    return REF_PKG_CREATE_CREDITS
+
+async def ref_pkg_credits_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = int(update.message.text.strip())
+        if val<1:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return REF_PKG_CREATE_CREDITS
+    ctx.user_data["ref_pkg"]["credits"] = val
+    await update.message.reply_text(t("adm_referral_pkg_data_prompt"), reply_markup=cancel_kb())
+    return REF_PKG_CREATE_DATA
+
+async def ref_pkg_data_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text.strip())
+        if val<0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return REF_PKG_CREATE_DATA
+    ctx.user_data["ref_pkg"]["data_gb"] = val
+    await update.message.reply_text(t("adm_referral_pkg_days_prompt"), reply_markup=cancel_kb())
+    return REF_PKG_CREATE_DAYS
+
+async def ref_pkg_days_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = int(update.message.text.strip())
+        if val<0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return REF_PKG_CREATE_DAYS
+    ctx.user_data["ref_pkg"]["days"] = val
+    await update.message.reply_text(t("adm_referral_pkg_ip_prompt"), reply_markup=cancel_kb())
+    return REF_PKG_CREATE_IP
+
+async def ref_pkg_ip_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = int(update.message.text.strip())
+        if val<0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return REF_PKG_CREATE_IP
+    ctx.user_data["ref_pkg"]["ip_limit"] = val
+    nodes = await gg.get_nodes()
+    ctx.user_data["ref_pkg"]["node_ids"] = []
+    await update.message.reply_text(t("adm_referral_pkg_nodes_prompt"), reply_markup=node_select_kb(nodes, [], "ref_pkg:nodes_done", "cancel", "ref_pkg:nodes_all", "ref_pkg:nodes_none"))
+    return REF_PKG_CREATE_NODES
+
+async def ref_pkg_node_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    nid = int(query.data.split(":", 1)[1])
+    ids = ctx.user_data["ref_pkg"].setdefault("node_ids", [])
+    if nid in ids:
+        ids.remove(nid)
+    else:
+        ids.append(nid)
+    nodes = await gg.get_nodes()
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, ids, "ref_pkg:nodes_done", "cancel", "ref_pkg:nodes_all", "ref_pkg:nodes_none"))
+    return REF_PKG_CREATE_NODES
+
+async def ref_pkg_nodes_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    nodes = await gg.get_nodes()
+    ctx.user_data["ref_pkg"]["node_ids"] = _all_node_ids(nodes)
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, ctx.user_data["ref_pkg"]["node_ids"], "ref_pkg:nodes_done", "cancel", "ref_pkg:nodes_all", "ref_pkg:nodes_none"))
+    return REF_PKG_CREATE_NODES
+
+async def ref_pkg_nodes_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    ctx.user_data["ref_pkg"]["node_ids"] = []
+    nodes = await gg.get_nodes()
+    await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, [], "ref_pkg:nodes_done", "cancel", "ref_pkg:nodes_all", "ref_pkg:nodes_none"))
+    return REF_PKG_CREATE_NODES
+
+async def ref_pkg_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pkg = ctx.user_data.pop("ref_pkg", {})
+    await db.create_referral_package(pkg["name"], pkg["credits"], pkg["data_gb"], pkg["days"], pkg["ip_limit"], pkg.get("node_ids", []))
+    await query.edit_message_text(t("adm_referral_pkg_created"), reply_markup=back_kb("set:referral"))
+    return ConversationHandler.END
+
+async def cb_ref_pkg_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pkg_id = query.data.split(":", 2)[2]
+    pkg = await db.get_referral_package(pkg_id)
+    if not pkg:
+        await query.edit_message_text(t("order_not_found"), reply_markup=back_kb("set:referral"))
+        return
+    data_text = t("adm_unlimited") if float(pkg["data_gb"])==0 else f"{pkg['data_gb']} GB"
+    days_text = t("adm_no_expiry") if int(pkg["days"])==0 else f"{pkg['days']}d"
+    ip_text = t("adm_unlimited") if int(pkg["ip_limit"])==0 else str(pkg["ip_limit"])
+    await query.edit_message_text(t("adm_referral_pkg_detail", name=pkg["name"], data_text=data_text, days_text=days_text, ip_text=ip_text, credits=pkg["credits_required"], status=t("adm_active") if pkg["is_active"] else t("adm_inactive")), reply_markup=referral_pkg_admin_kb(pkg_id, pkg["is_active"]), parse_mode="Markdown")
+
+async def cb_ref_pkg_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pkg_id = query.data.split(":", 2)[2]
+    await db.toggle_referral_package(pkg_id)
+    await cb_ref_pkg_detail(update, ctx)
+
+async def cb_ref_pkg_delete(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    pkg_id = query.data.split(":", 2)[2]
+    await db.delete_referral_package(pkg_id)
+    await query.edit_message_text(t("adm_referral_pkg_deleted"), reply_markup=back_kb("set:referral"))
+
 def get_main_conv_handler():
     states = {
         WIZARD_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_url)],
@@ -2897,6 +3043,17 @@ def get_main_conv_handler():
         ],
         ADMIN_SUB_BULK_NOTE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, sub_bulk_note_save)],
         SETTINGS_GP_PAIR_RATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, gp_pair_rate_save)],
+        REF_PKG_CREATE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ref_pkg_name_input)],
+        REF_PKG_CREATE_CREDITS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ref_pkg_credits_input)],
+        REF_PKG_CREATE_DATA: [MessageHandler(filters.TEXT & ~filters.COMMAND, ref_pkg_data_input)],
+        REF_PKG_CREATE_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, ref_pkg_days_input)],
+        REF_PKG_CREATE_IP: [MessageHandler(filters.TEXT & ~filters.COMMAND, ref_pkg_ip_input)],
+        REF_PKG_CREATE_NODES: [
+            CallbackQueryHandler(ref_pkg_node_toggle, pattern=r"^node_toggle:"),
+            CallbackQueryHandler(ref_pkg_nodes_all, pattern=r"^ref_pkg:nodes_all$"),
+            CallbackQueryHandler(ref_pkg_nodes_none, pattern=r"^ref_pkg:nodes_none$"),
+            CallbackQueryHandler(ref_pkg_nodes_done, pattern=r"^ref_pkg:nodes_done$"),
+        ],
         SETTINGS_DISCOUNT_CODE_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_code_input)],
         SETTINGS_DISCOUNT_CODE_PCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_pct_input)],
         SETTINGS_DISCOUNT_CODE_MAXUSES: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_maxuses_input)],
@@ -2978,6 +3135,7 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_sub_bulk_note_start, pattern=r"^subs:bulk_note$"),
         CallbackQueryHandler(cb_curr_edit_rate, pattern=r"^curr:edit_rate:"),
         CallbackQueryHandler(cb_reject_order, pattern=r"^order:reject:"),
+        CallbackQueryHandler(cb_ref_pkg_create, pattern=r"^ref_pkg:create$"),
     ]
     return ConversationHandler(entry_points=entry_points, states=states, fallbacks=[CallbackQueryHandler(cb_cancel_conv, pattern=r"^cancel$")], per_message=False, name="admin_main")
 
@@ -3041,4 +3199,9 @@ def get_handlers():
         CallbackQueryHandler(cb_offer_delete, pattern=r"^offer:delete:"),
         CallbackQueryHandler(cb_adm_logs, pattern=r"^adm:logs$"),
         CallbackQueryHandler(cb_adm_logs_page, pattern=r"^adm:logs_page:"),
+        CallbackQueryHandler(cb_set_referral, pattern=r"^set:referral$"),
+        CallbackQueryHandler(cb_referral_toggle, pattern=r"^set:referral_toggle$"),
+        CallbackQueryHandler(cb_ref_pkg_detail, pattern=r"^ref_pkg:detail:"),
+        CallbackQueryHandler(cb_ref_pkg_toggle, pattern=r"^ref_pkg:toggle:"),
+        CallbackQueryHandler(cb_ref_pkg_delete, pattern=r"^ref_pkg:delete:"),
     ]

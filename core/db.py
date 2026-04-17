@@ -41,6 +41,13 @@ def _migrate_v3(db):
     db.execute("PRAGMA user_version=3")
     db.commit()
 
+def _migrate_v4(db):
+    db.execute("CREATE TABLE IF NOT EXISTS referral_packages (id TEXT PRIMARY KEY, name TEXT NOT NULL, credits_required INTEGER NOT NULL DEFAULT 1, data_gb REAL NOT NULL DEFAULT 0, days INTEGER NOT NULL DEFAULT 30, ip_limit INTEGER NOT NULL DEFAULT 1, node_ids TEXT NOT NULL DEFAULT '[]', is_active INTEGER DEFAULT 1, created_at TEXT DEFAULT (datetime('now')))")
+    db.execute("CREATE TABLE IF NOT EXISTS referral_claims (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_id TEXT NOT NULL REFERENCES users(id), referred_id TEXT NOT NULL UNIQUE REFERENCES users(id), created_at TEXT DEFAULT (datetime('now')))")
+    db.execute("CREATE TABLE IF NOT EXISTS referral_redemptions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), package_id TEXT NOT NULL REFERENCES referral_packages(id), credits_used INTEGER NOT NULL DEFAULT 1, ghostgate_sub_id TEXT, created_at TEXT DEFAULT (datetime('now')))")
+    db.execute("PRAGMA user_version=4")
+    db.commit()
+
 async def init_db():
     def _sync():
         with _open() as db:
@@ -53,6 +60,8 @@ async def init_db():
                 _migrate_v2(db)
             if version<3:
                 _migrate_v3(db)
+            if version<4:
+                _migrate_v4(db)
     await asyncio.to_thread(_sync)
 
 async def upsert_user(telegram_id, username, first_name):
@@ -342,6 +351,7 @@ async def update_ghostgate_sub_id(old_sub_id, new_sub_id):
         with _open() as db:
             db.execute("UPDATE orders SET ghostgate_sub_id=? WHERE ghostgate_sub_id=?", (new_sub_id, old_sub_id))
             db.execute("UPDATE trial_claims SET ghostgate_sub_id=? WHERE ghostgate_sub_id=?", (new_sub_id, old_sub_id))
+            db.execute("UPDATE referral_redemptions SET ghostgate_sub_id=? WHERE ghostgate_sub_id=?", (new_sub_id, old_sub_id))
             db.commit()
     await asyncio.to_thread(_sync)
 
@@ -350,6 +360,7 @@ async def nullify_ghostgate_sub_id(sub_id):
         with _open() as db:
             db.execute("UPDATE orders SET ghostgate_sub_id=NULL WHERE ghostgate_sub_id=?", (sub_id,))
             db.execute("UPDATE trial_claims SET ghostgate_sub_id=NULL WHERE ghostgate_sub_id=?", (sub_id,))
+            db.execute("UPDATE referral_redemptions SET ghostgate_sub_id=NULL WHERE ghostgate_sub_id=?", (sub_id,))
             db.commit()
     await asyncio.to_thread(_sync)
 
@@ -496,3 +507,92 @@ async def list_admin_logs(offset=0, limit=20):
             total = db.execute("SELECT COUNT(*) FROM admin_logs").fetchone()[0]
             return [dict(r) for r in rows], total
     return await asyncio.to_thread(_sync)
+
+async def create_referral_package(name, credits_required, data_gb, days, ip_limit, node_ids):
+    def _sync():
+        with _open() as db:
+            pid=generate(size=20)
+            db.execute("INSERT INTO referral_packages (id, name, credits_required, data_gb, days, ip_limit, node_ids) VALUES (?,?,?,?,?,?,?)", (pid, name, credits_required, data_gb, days, ip_limit, json.dumps(node_ids)))
+            db.commit()
+            return pid
+    return await asyncio.to_thread(_sync)
+
+async def list_referral_packages(active_only=False):
+    def _sync():
+        with _open() as db:
+            q="SELECT * FROM referral_packages WHERE is_active=1 ORDER BY credits_required, created_at" if active_only else "SELECT * FROM referral_packages ORDER BY credits_required, created_at"
+            rows=db.execute(q).fetchall()
+            result=[]
+            for r in rows:
+                d=dict(r)
+                d["node_ids"]=json.loads(d["node_ids"])
+                result.append(d)
+            return result
+    return await asyncio.to_thread(_sync)
+
+async def get_referral_package(pkg_id):
+    def _sync():
+        with _open() as db:
+            row=db.execute("SELECT * FROM referral_packages WHERE id=?", (pkg_id,)).fetchone()
+            if not row:
+                return None
+            d=dict(row)
+            d["node_ids"]=json.loads(d["node_ids"])
+            return d
+    return await asyncio.to_thread(_sync)
+
+async def toggle_referral_package(pkg_id):
+    def _sync():
+        with _open() as db:
+            db.execute("UPDATE referral_packages SET is_active=1-is_active WHERE id=?", (pkg_id,))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
+async def delete_referral_package(pkg_id):
+    def _sync():
+        with _open() as db:
+            db.execute("DELETE FROM referral_packages WHERE id=?", (pkg_id,))
+            db.commit()
+    await asyncio.to_thread(_sync)
+
+async def record_referral(referrer_id, referred_id):
+    def _sync():
+        with _open() as db:
+            existing=db.execute("SELECT 1 FROM referral_claims WHERE referred_id=?", (referred_id,)).fetchone()
+            if existing:
+                return False
+            db.execute("INSERT INTO referral_claims (referrer_id, referred_id) VALUES (?,?)", (referrer_id, referred_id))
+            db.commit()
+            return True
+    return await asyncio.to_thread(_sync)
+
+async def get_referral_credits(user_id):
+    def _sync():
+        with _open() as db:
+            earned=db.execute("SELECT COUNT(*) FROM referral_claims WHERE referrer_id=?", (user_id,)).fetchone()[0]
+            used=db.execute("SELECT COALESCE(SUM(credits_used),0) FROM referral_redemptions WHERE user_id=?", (user_id,)).fetchone()[0]
+            return {"earned": earned, "used": used, "available": earned-used}
+    return await asyncio.to_thread(_sync)
+
+async def redeem_referral_package(user_id, package_id, credits_used, ghostgate_sub_id):
+    def _sync():
+        with _open() as db:
+            rid=generate(size=20)
+            db.execute("INSERT INTO referral_redemptions (id, user_id, package_id, credits_used, ghostgate_sub_id) VALUES (?,?,?,?,?)", (rid, user_id, package_id, credits_used, ghostgate_sub_id))
+            db.commit()
+            return rid
+    return await asyncio.to_thread(_sync)
+
+async def get_user_by_telegram_safe(telegram_id):
+    try:
+        tid=int(telegram_id)
+    except Exception:
+        return None
+    return await get_user_by_telegram(tid)
+
+async def nullify_referral_redemption_sub(sub_id):
+    def _sync():
+        with _open() as db:
+            db.execute("UPDATE referral_redemptions SET ghostgate_sub_id=NULL WHERE ghostgate_sub_id=?", (sub_id,))
+            db.commit()
+    await asyncio.to_thread(_sync)
