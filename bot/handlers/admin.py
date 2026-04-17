@@ -2873,7 +2873,7 @@ async def ref_pkg_ip_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(t("invalid_input"))
         return REF_PKG_CREATE_IP
     ctx.user_data["ref_pkg"]["ip_limit"] = val
-    nodes = await gg.get_nodes()
+    nodes = await gg.list_nodes()
     ctx.user_data["ref_pkg"]["node_ids"] = []
     await update.message.reply_text(t("adm_referral_pkg_nodes_prompt"), reply_markup=node_select_kb(nodes, [], "ref_pkg:nodes_done", "cancel", "ref_pkg:nodes_all", "ref_pkg:nodes_none"))
     return REF_PKG_CREATE_NODES
@@ -2887,14 +2887,14 @@ async def ref_pkg_node_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ids.remove(nid)
     else:
         ids.append(nid)
-    nodes = await gg.get_nodes()
+    nodes = await gg.list_nodes()
     await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, ids, "ref_pkg:nodes_done", "cancel", "ref_pkg:nodes_all", "ref_pkg:nodes_none"))
     return REF_PKG_CREATE_NODES
 
 async def ref_pkg_nodes_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    nodes = await gg.get_nodes()
+    nodes = await gg.list_nodes()
     ctx.user_data["ref_pkg"]["node_ids"] = _all_node_ids(nodes)
     await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, ctx.user_data["ref_pkg"]["node_ids"], "ref_pkg:nodes_done", "cancel", "ref_pkg:nodes_all", "ref_pkg:nodes_none"))
     return REF_PKG_CREATE_NODES
@@ -2903,7 +2903,7 @@ async def ref_pkg_nodes_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     ctx.user_data["ref_pkg"]["node_ids"] = []
-    nodes = await gg.get_nodes()
+    nodes = await gg.list_nodes()
     await query.edit_message_reply_markup(reply_markup=node_select_kb(nodes, [], "ref_pkg:nodes_done", "cancel", "ref_pkg:nodes_all", "ref_pkg:nodes_none"))
     return REF_PKG_CREATE_NODES
 
