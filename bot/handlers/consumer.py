@@ -380,10 +380,11 @@ async def cb_trial_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     result = await gg.create_subscription(
         comment=f"Trial-{query.from_user.id}",
         data_gb=data_gb,
-        days=3650 if (trial_start_after_use=="1" or expire_s<86400) else max(1, (expire_s+86399)//86400),
+        days=3650 if trial_start_after_use=="1" else max(1, (expire_s+86399)//86400),
         ip_limit=1,
         node_ids=node_ids,
-        expire_after_first_use_seconds=expire_s if (trial_start_after_use=="1" or expire_s<86400) else None,
+        expire_after_first_use_seconds=expire_s if trial_start_after_use=="1" else None,
+        expire_seconds=expire_s if trial_start_after_use=="0" else None,
         note=trial_note
     )
     if not result or not result.get("id"):
