@@ -42,7 +42,7 @@ def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_
         rows.append([InlineKeyboardButton(t("btn_request_sub"), callback_data=f"buy:request:{plan_id}")])
     if manual_enabled:
         rows.append([InlineKeyboardButton(t("btn_pay_manual"), callback_data=f"buy:manual:{plan_id}")])
-    code_label = f"🏷️ Code Applied ({discount_pct}% off)" if discount_pct else "🏷️ Use Discount Code"
+    code_label = t("btn_discount_applied", pct=discount_pct) if discount_pct else t("btn_discount_use")
     rows.append([InlineKeyboardButton(code_label, callback_data=f"buy:discount:{plan_id}")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="consumer:plans")])
     return InlineKeyboardMarkup(rows)
