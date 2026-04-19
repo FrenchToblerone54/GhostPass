@@ -394,6 +394,12 @@ _EN = {
     "adm_notifications_title": "🔔 *Admin Notifications*\n\nToggle events to receive admin pings for.",
     "adm_notif_sub_start_msg_prompt": "Enter message to send users when their subscription starts being used (send - to use default):\nCurrent: {current}",
     "adm_notif_sub_start_msg_default": "▶️ Your subscription has started being used!",
+    "notif_label_discount": "🏷️ Discount Code",
+    "notif_label_payment_link": "🔗 Payment Link",
+    "notif_label_purchase": "💰 Purchase",
+    "notif_label_trial": "🎁 Trial",
+    "notif_label_sub_start": "▶️ Sub First Used",
+    "notif_btn_sub_start_msg": "✏️ Sub-start message",
 }
 
 _FA = {
@@ -790,6 +796,12 @@ _FA = {
     "adm_notifications_title": "🔔 *اعلان‌های ادمین*\n\nرویدادهایی که می‌خواهید اعلان دریافت کنید را تنظیم کنید.",
     "adm_notif_sub_start_msg_prompt": "پیامی که هنگام شروع استفاده اشتراک برای کاربران ارسال می‌شود را وارد کنید (- برای استفاده از پیش‌فرض):\nفعلی: {current}",
     "adm_notif_sub_start_msg_default": "▶️ اشتراک شما شروع به استفاده شد!",
+    "notif_label_discount": "🏷️ کد تخفیف",
+    "notif_label_payment_link": "🔗 لینک پرداخت",
+    "notif_label_purchase": "💰 خرید",
+    "notif_label_trial": "🎁 آزمایشی",
+    "notif_label_sub_start": "▶️ اولین استفاده اشتراک",
+    "notif_btn_sub_start_msg": "✏️ پیام شروع اشتراک",
 }
 
 def t(key, **kwargs):

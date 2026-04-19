@@ -232,14 +232,14 @@ def referral_pkg_admin_kb(pkg_id, is_active):
 
 def notifications_kb(s):
     events = [
-        ("notify_discount", "🏷️ Discount Code"),
-        ("notify_payment_link", "🔗 Payment Link"),
-        ("notify_purchase", "💰 Purchase"),
-        ("notify_trial", "🎁 Trial"),
-        ("notify_sub_start", "▶️ Sub First Used"),
+        ("notify_discount", "notif_label_discount"),
+        ("notify_payment_link", "notif_label_payment_link"),
+        ("notify_purchase", "notif_label_purchase"),
+        ("notify_trial", "notif_label_trial"),
+        ("notify_sub_start", "notif_label_sub_start"),
     ]
-    rows = [[InlineKeyboardButton(f"{'✅' if s.get(k)=='1' else '❌'} {label}", callback_data=f"notif_toggle:{k}")] for k, label in events]
-    rows.append([InlineKeyboardButton("✏️ Sub-start message", callback_data="notif:sub_start_msg")])
+    rows = [[InlineKeyboardButton(f"{'✅' if s.get(k)=='1' else '❌'} {t(label_key)}", callback_data=f"notif_toggle:{k}")] for k, label_key in events]
+    rows.append([InlineKeyboardButton(t("notif_btn_sub_start_msg"), callback_data="notif:sub_start_msg")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     return InlineKeyboardMarkup(rows)
 
