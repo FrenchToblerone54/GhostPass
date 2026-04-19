@@ -389,6 +389,45 @@ async def cb_walletpay_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     provider="ghostpayments" if use_ghostpayments else ("btcpay" if use_btcpay else "cryptomus")
     asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key, gp_url))
 
+async def cb_walletpay_gp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return
+    parts=query.data.split(":", 3)
+    gp_chain, gp_token=parts[2], parts[3]
+    amount_raw=ctx.user_data.get("wallet_topup_amount")
+    if not amount_raw:
+        await query.edit_message_text(t("order_not_found"))
+        return
+    gp_url=settings.GHOSTPAYMENTS_URL or await db.get_setting("ghostpayments_url", "")
+    gp_key=settings.GHOSTPAYMENTS_API_KEY or await db.get_setting("ghostpayments_api_key", "")
+    gp_amount, gp_code, gp_decimals=await price_for_gp_pair(float(amount_raw), gp_chain, gp_token)
+    if gp_amount is None:
+        await query.edit_message_text(t("ghostpayments_no_rate", chain=gp_chain, token=gp_token), parse_mode="Markdown")
+        return
+    price_str=f"{fmt(gp_amount, gp_decimals, gp_code)} {gp_code}"
+    u=update.effective_user
+    uid=await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    order_id=await db.create_order(uid, None, "crypto", float(gp_amount), gp_code)
+    ctx.user_data.pop("wallet_topup_amount", None)
+    try:
+        inv=await create_invoice_ghostpayments(gp_url, gp_key, gp_chain, gp_token, fmt(gp_amount, gp_decimals, gp_code), order_id)
+        invoice_id=inv.get("invoice_id") or inv.get("id")
+        pay_url=inv.get("payment_url")
+    except Exception as e:
+        logger.error("GhostPayments wallet invoice error: %s", e)
+        await query.edit_message_text(t("ghostgate_error"))
+        return
+    if not invoice_id or not pay_url:
+        await query.edit_message_text(t("ghostgate_error"))
+        return
+    await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
+    kb=InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_open_payment"), url=pay_url)]])
+    await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
+    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated crypto payment for wallet top-up — {price_str}"))
+    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, "", "", ctx.bot, "ghostpayments", "", "", "", gp_url))
+
 async def _webhook_handler(request):
     try:
         body = await request.read()
@@ -432,4 +471,4 @@ async def run_webhook_server(bot=None):
     logger.info("Cryptomus webhook server started on port 8090")
 
 def get_handlers():
-    return [CallbackQueryHandler(cb_buy_crypto, pattern=r"^buy:crypto:"), CallbackQueryHandler(cb_buy_gp_pick, pattern=r"^buy:gp:"), CallbackQueryHandler(cb_walletpay_crypto, pattern=r"^walletpay:crypto$")]
+    return [CallbackQueryHandler(cb_buy_crypto, pattern=r"^buy:crypto:"), CallbackQueryHandler(cb_buy_gp_pick, pattern=r"^buy:gp:"), CallbackQueryHandler(cb_walletpay_crypto, pattern=r"^walletpay:crypto$"), CallbackQueryHandler(cb_walletpay_gp, pattern=r"^walletpay:gp:")]
