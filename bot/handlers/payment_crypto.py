@@ -128,6 +128,14 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         effective_price = float(Decimal(str(plan["price"])) - discount)
     else:
         effective_price = plan["price"]
+    u = update.effective_user
+    uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    wallet_use = ctx.user_data.pop(f"wallet_use:{plan_id}", False)
+    wallet_deduct = 0.0
+    if wallet_use:
+        wallet_balance = await db.get_wallet_balance(uid)
+        wallet_deduct = min(wallet_balance, effective_price)
+        effective_price = max(0.0, effective_price-wallet_deduct)
     discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
     ctx.user_data.pop(f"discount_pct:{plan_id}", None)
     ctx.user_data.pop(f"discount_max:{plan_id}", None)
@@ -140,11 +148,11 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
     amount, code, decimals = await price_for_method(effective_price, "crypto")
     price_str = f"{fmt(gp_amount, gp_decimals, gp_code)} {gp_code}" if use_ghostpayments else f"{fmt(amount, decimals, code)} {code}"
-    u = update.effective_user
-    uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
     order_id = await db.create_order(uid, plan_id, "crypto", float(gp_amount if use_ghostpayments else amount), gp_code if use_ghostpayments else code)
     if discount_code_used:
         await db.update_order(order_id, discount_code=discount_code_used)
+    if wallet_deduct>0:
+        await db.update_order(order_id, wallet_credit_used=wallet_deduct)
     try:
         if use_ghostpayments:
             inv=await create_invoice_ghostpayments(gp_url, gp_key, gp_chain, gp_token, fmt(gp_amount, gp_decimals, gp_code), order_id)
@@ -266,6 +274,10 @@ async def _activate_order(order_id, telegram_id, bot):
     await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=now)
     if order.get("discount_code"):
         await db.use_discount_code(order["discount_code"])
+    if order.get("wallet_credit_used", 0)>0:
+        await db.adjust_wallet(order["user_id"], -order["wallet_credit_used"])
+    from bot.handlers.admin import _credit_referral_commission
+    asyncio.create_task(_credit_referral_commission(order["user_id"], plan["price"], bot))
     asyncio.create_task(admin_event(bot, "notify_purchase", f"💰 *Crypto purchase confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*\n💵 Amount: {order.get('amount','')} {order.get('currency','')}"))
     u_name = f"@{user['username']}" if user.get("username") else str(user["telegram_id"])
     admin_caption = t("crypto_paid_admin", first_name=user.get("first_name",""), username=u_name, telegram_id=user["telegram_id"], plan_name=plan["name"], amount=order.get("amount",""), currency=order.get("currency",""))

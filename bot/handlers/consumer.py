@@ -284,17 +284,23 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not plan:
         await query.edit_message_text(t("order_not_found"))
         return
+    uid = await _ensure_user(update)
+    wallet_balance = await db.get_wallet_balance(uid)
+    wallet_use = ctx.user_data.get(f"wallet_use:{plan_id}", False)
     card_enabled = await db.get_setting("card_enabled", "0")=="1"
     crypto_enabled = (await db.get_setting("cryptomus_enabled", "0")=="1") or (await db.get_setting("ghostpayments_enabled", "0")=="1")
     requests_enabled = await db.get_setting("requests_enabled", "0")=="1"
     manual_enabled = await db.get_setting("manual_enabled", "1")=="1"
     support = await db.get_setting("support_username", "")
     discount_pct = ctx.user_data.get(f"discount_pct:{plan_id}", 0)
+    discount_max = ctx.user_data.get(f"discount_max:{plan_id}", 0)
     if not discount_pct:
         offer = await db.get_active_offer_for_plan(plan_id)
         if offer:
             discount_pct = offer["discount_percent"]
+            discount_max = 0
     effective_price = await _discounted_price(plan["price"], discount_pct)
+    wallet_covers_full = wallet_use and wallet_balance>=effective_price
     data_text=t("adm_unlimited") if float(plan["data_gb"])==0 else f"{plan['data_gb']} GB"
     days_text=t("adm_no_expiry") if int(plan["days"])==0 else str(plan["days"])
     ip_text=t("adm_unlimited") if int(plan["ip_limit"])==0 else str(plan["ip_limit"])
@@ -312,6 +318,8 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         base = await get_base_currency()
         prices = "\n" + t("plan_price_fallback", price=f"{fmt(Decimal(str(effective_price)), 0, base)} {base}")
     text += prices
+    if wallet_balance>0:
+        text += f"\n{t('wallet_info', balance=wallet_balance)}"
     if not card_enabled and not crypto_enabled and not requests_enabled and not manual_enabled:
         if support:
             text += t("support_purchase", support=support)
@@ -319,8 +327,87 @@ async def cb_plan_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             text += t("support_purchase_no_contact")
         await query.edit_message_text(text, reply_markup=back_kb("consumer:plans"), parse_mode="Markdown")
         return
-    kb = plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled, discount_pct=discount_pct)
+    kb = plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled, discount_pct=discount_pct, wallet_balance=wallet_balance, wallet_use=wallet_use, wallet_covers_full=wallet_covers_full)
     await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+
+async def cb_wallet_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plan_id = query.data.split(":", 2)[2]
+    current = ctx.user_data.get(f"wallet_use:{plan_id}", False)
+    ctx.user_data[f"wallet_use:{plan_id}"] = not current
+    query.data = f"plan:{plan_id}"
+    await cb_plan_detail(update, ctx)
+
+async def cb_buy_wallet_only(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return
+    plan_id = query.data.split(":", 2)[2]
+    plan = await db.get_plan(plan_id)
+    if not plan:
+        await query.edit_message_text(t("order_not_found"))
+        return
+    u = update.effective_user
+    uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    wallet_balance = await db.get_wallet_balance(uid)
+    discount_pct = ctx.user_data.get(f"discount_pct:{plan_id}", 0)
+    discount_max = ctx.user_data.get(f"discount_max:{plan_id}", 0)
+    if not discount_pct:
+        offer = await db.get_active_offer_for_plan(plan_id)
+        if offer:
+            discount_pct = offer["discount_percent"]
+            discount_max = 0
+    if discount_pct:
+        discount = Decimal(str(plan["price"]))*Decimal(str(discount_pct))/100
+        if discount_max>0:
+            discount = min(discount, Decimal(str(discount_max)))
+        effective_price = float(Decimal(str(plan["price"]))-discount)
+    else:
+        effective_price = plan["price"]
+    if wallet_balance<effective_price:
+        await query.answer(t("adm_wallet_insufficient"), show_alert=True)
+        return
+    discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
+    ctx.user_data.pop(f"discount_pct:{plan_id}", None)
+    ctx.user_data.pop(f"discount_max:{plan_id}", None)
+    ctx.user_data.pop(f"wallet_use:{plan_id}", None)
+    order_id = await db.create_order(uid, plan_id, "wallet", effective_price, await get_base_currency())
+    if discount_code_used:
+        await db.update_order(order_id, discount_code=discount_code_used)
+    await db.update_order(order_id, wallet_credit_used=effective_price)
+    expire_after_first_use_seconds = None
+    if int(plan["days"])>0 and await db.get_setting("plan_start_after_use", "0")=="1":
+        expire_after_first_use_seconds = int(plan["days"])*86400
+    paid_note = await db.get_setting("paid_note", "") or None
+    result = await gg.create_subscription(
+        comment=u.first_name or str(u.id),
+        data_gb=plan["data_gb"],
+        days=3650 if expire_after_first_use_seconds else plan["days"],
+        ip_limit=plan["ip_limit"],
+        node_ids=plan["node_ids"],
+        expire_after_first_use_seconds=expire_after_first_use_seconds,
+        note=paid_note
+    )
+    if not result:
+        await query.edit_message_text(t("wallet_order_fail"))
+        return
+    sub_id = result.get("id")
+    sub_url = result.get("url", "")
+    from datetime import datetime, timezone
+    await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
+    if discount_code_used:
+        await db.use_discount_code(discount_code_used)
+    await db.adjust_wallet(uid, -effective_price)
+    from bot.handlers.admin import _credit_referral_commission
+    asyncio.create_task(_credit_referral_commission(uid, plan["price"], ctx.bot))
+    qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
+    if qr_bytes:
+        await query.message.reply_photo(photo=io.BytesIO(qr_bytes), caption=t("wallet_order_created", url=sub_url), parse_mode="Markdown")
+        await query.edit_message_text(t("wallet_order_created", url=sub_url), parse_mode="Markdown")
+    else:
+        await query.edit_message_text(t("wallet_order_created", url=sub_url), parse_mode="Markdown")
 
 async def cb_consumer_plans(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -673,4 +760,6 @@ def get_handlers():
         CallbackQueryHandler(cb_referral_redeem, pattern=r"^ref:redeem:"),
         CallbackQueryHandler(cb_referral_confirm, pattern=r"^ref:confirm:"),
         CallbackQueryHandler(cb_referral_back, pattern=r"^ref:back$"),
+        CallbackQueryHandler(cb_wallet_toggle, pattern=r"^buy:wallet_toggle:"),
+        CallbackQueryHandler(cb_buy_wallet_only, pattern=r"^buy:wallet:[A-Za-z0-9_-]{20}$"),
     ]

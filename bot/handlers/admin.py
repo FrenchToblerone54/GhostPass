@@ -22,7 +22,7 @@ from bot.keyboards import (
     user_actions_kb, sub_actions_kb, node_select_kb,
     order_detail_kb, skip_kb, cancel_kb, currencies_kb,
     method_select_kb, curr_detail_kb, base_select_kb, subs_bulk_note_kb, logs_kb,
-    referral_settings_kb, referral_pkg_admin_kb, notifications_kb
+    referral_settings_kb, referral_pkg_admin_kb, notifications_kb, wallet_adjust_kb
 )
 from bot.strings import t
 from bot.notifications import admin_event
@@ -55,7 +55,8 @@ from bot.states import (
     REF_PKG_CREATE_NAME, REF_PKG_CREATE_CREDITS, REF_PKG_CREATE_DATA,
     REF_PKG_CREATE_DAYS, REF_PKG_CREATE_IP, REF_PKG_CREATE_NODES,
     REF_PKG_EDIT_NODES, REF_PKG_BULK_NODES_PKGS, REF_PKG_BULK_NODES,
-    ADMIN_BROADCAST_INPUT, SETTINGS_NOTIF_SUB_MSG
+    ADMIN_BROADCAST_INPUT, SETTINGS_NOTIF_SUB_MSG,
+    ADMIN_WALLET_ADD, ADMIN_WALLET_REMOVE, SETTINGS_REF_COMMISSION_PCT
 )
 from config import settings
 
@@ -1248,13 +1249,32 @@ async def cb_subs_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_adm_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    users, total = await db.list_users(limit=5)
-    text = f"👥 *Users* ({total} total)\n\nRecent users:\n"
+    await _show_users_page(query, 0)
+
+async def _show_users_page(query, page):
+    per_page = 10
+    users, total = await db.list_users(offset=page*per_page, limit=per_page)
+    pages = max(1, (total+per_page-1)//per_page)
+    text = t("adm_users_list", total=total, page=page+1, pages=pages)
     for u in users:
         uname = f"@{u['username'].replace('_', '\\_')}" if u.get("username") else str(u["telegram_id"])
         text += f"• {u.get('first_name') or ''} {uname}\n"
-    rows = [[InlineKeyboardButton(t("adm_search_user_btn"), callback_data="users:search")], [InlineKeyboardButton(t("btn_back"), callback_data="adm:back")]]
+    rows = [[InlineKeyboardButton(t("adm_search_user_btn"), callback_data="users:search")]]
+    nav = []
+    if page>0:
+        nav.append(InlineKeyboardButton("◀️", callback_data=f"users:page:{page-1}"))
+    if (page+1)*per_page<total:
+        nav.append(InlineKeyboardButton("▶️", callback_data=f"users:page:{page+1}"))
+    if nav:
+        rows.append(nav)
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+
+async def cb_users_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    page = int(query.data.split(":", 2)[2])
+    await _show_users_page(query, page)
 
 async def cb_users_search_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _is_admin(update.effective_user.id):
@@ -1338,6 +1358,70 @@ async def cb_user_reset_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         await query.answer(t("adm_trial_no_claim"), show_alert=True)
 
+async def cb_user_wallet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.data.split(":", 2)[2]
+    balance = await db.get_wallet_balance(uid)
+    await query.edit_message_text(t("adm_wallet_title", balance=balance), reply_markup=wallet_adjust_kb(uid, f"user:detail:{uid}"), parse_mode="Markdown")
+
+async def cb_user_wallet_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    uid = query.data.split(":", 2)[2]
+    ctx.user_data["wallet_adjust_uid"] = uid
+    await query.edit_message_text(t("adm_wallet_add_prompt"), reply_markup=cancel_kb())
+    return ADMIN_WALLET_ADD
+
+async def handle_wallet_add(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = ctx.user_data.pop("wallet_adjust_uid", None)
+    if not uid:
+        return ConversationHandler.END
+    try:
+        amount = float(update.message.text.strip())
+        if amount<=0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("adm_wallet_invalid"))
+        return ConversationHandler.END
+    new_bal = await db.adjust_wallet(uid, amount)
+    await db.log_admin_action(update.effective_user.id, "wallet_add", f"uid:{uid} amount:{amount}")
+    await update.message.reply_text(t("adm_wallet_adjusted", balance=new_bal))
+    return ConversationHandler.END
+
+async def cb_user_wallet_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    uid = query.data.split(":", 2)[2]
+    balance = await db.get_wallet_balance(uid)
+    ctx.user_data["wallet_adjust_uid"] = uid
+    await query.edit_message_text(t("adm_wallet_remove_prompt", balance=balance), reply_markup=cancel_kb())
+    return ADMIN_WALLET_REMOVE
+
+async def handle_wallet_remove(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = ctx.user_data.pop("wallet_adjust_uid", None)
+    if not uid:
+        return ConversationHandler.END
+    try:
+        amount = float(update.message.text.strip())
+        if amount<=0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("adm_wallet_invalid"))
+        return ConversationHandler.END
+    balance = await db.get_wallet_balance(uid)
+    if amount>balance:
+        await update.message.reply_text(t("adm_wallet_insufficient"))
+        return ConversationHandler.END
+    new_bal = await db.adjust_wallet(uid, -amount)
+    await db.log_admin_action(update.effective_user.id, "wallet_remove", f"uid:{uid} amount:{amount}")
+    await update.message.reply_text(t("adm_wallet_adjusted", balance=new_bal))
+    return ConversationHandler.END
+
 async def cb_adm_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1418,6 +1502,9 @@ async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
     if order.get("discount_code"):
         await db.use_discount_code(order["discount_code"])
+    if order.get("wallet_credit_used", 0)>0:
+        await db.adjust_wallet(order["user_id"], -order["wallet_credit_used"])
+    asyncio.create_task(_credit_referral_commission(order["user_id"], plan["price"], ctx.bot))
     asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💰 *Purchase confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*\n💵 Amount: {order.get('amount','')} {order.get('currency','')}"))
     await db.log_admin_action(update.effective_user.id, "confirm_order", f"order:{order_id} sub:{sub_id}")
     admin_name = update.effective_user.first_name or str(update.effective_user.id)
@@ -2881,8 +2968,11 @@ async def cb_set_referral(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     enabled = await db.get_setting("referral_enabled", "0")=="1"
     packages = await db.list_referral_packages()
+    commission_enabled = await db.get_setting("referral_commission_enabled", "0")=="1"
+    commission_pct = float(await db.get_setting("referral_commission_pct", "0") or "0")
     pkg_lines = "\n".join(t("adm_referral_pkg_item", name=p["name"], credits=p["credits_required"], data=p["data_gb"], days=p["days"], ip=p["ip_limit"], status=t("adm_active") if p["is_active"] else t("adm_inactive")) for p in packages) or t("adm_referral_pkg_none")
-    await query.edit_message_text(t("adm_referral_title", status=t("adm_enabled") if enabled else t("adm_disabled"), packages=pkg_lines), reply_markup=referral_settings_kb(enabled, packages), parse_mode="Markdown")
+    text = t("adm_referral_title", status=t("adm_enabled") if enabled else t("adm_disabled"), packages=pkg_lines) + t("referral_commission_info", status=t("adm_enabled") if commission_enabled else t("adm_disabled"), pct=commission_pct)
+    await query.edit_message_text(text, reply_markup=referral_settings_kb(enabled, packages, commission_enabled, commission_pct), parse_mode="Markdown")
 
 async def cb_referral_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2890,6 +2980,56 @@ async def cb_referral_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     enabled = await db.get_setting("referral_enabled", "0")=="1"
     await db.set_setting("referral_enabled", "0" if enabled else "1")
     await cb_set_referral(update, ctx)
+
+async def cb_referral_commission_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    enabled = await db.get_setting("referral_commission_enabled", "0")=="1"
+    await db.set_setting("referral_commission_enabled", "0" if enabled else "1")
+    await cb_set_referral(update, ctx)
+
+async def cb_referral_commission_pct_prompt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await _is_admin(update.effective_user.id):
+        return ConversationHandler.END
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_referral_commission_prompt"), reply_markup=cancel_kb())
+    return SETTINGS_REF_COMMISSION_PCT
+
+async def handle_referral_commission_pct(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text.strip())
+        if val<0 or val>100:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return ConversationHandler.END
+    await db.set_setting("referral_commission_pct", str(val))
+    await update.message.reply_text(t("adm_wallet_adjusted", balance=val))
+    return ConversationHandler.END
+
+async def _credit_referral_commission(user_id, plan_price, bot):
+    if await db.get_setting("referral_commission_enabled", "0")!="1":
+        return
+    try:
+        pct = float(await db.get_setting("referral_commission_pct", "0") or "0")
+    except Exception:
+        return
+    if pct<=0:
+        return
+    referrer_id = await db.get_referrer_for_user(user_id)
+    if not referrer_id:
+        return
+    amount = round(float(plan_price)*pct/100, 2)
+    if amount<=0:
+        return
+    await db.adjust_wallet(referrer_id, amount)
+    referrer = await db.get_user_by_id(referrer_id)
+    if referrer:
+        try:
+            await bot.send_message(int(referrer["telegram_id"]), t("referral_commission_earned", amount=amount))
+        except Exception:
+            pass
 
 async def cb_ref_pkg_create(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await _is_admin(update.effective_user.id):
@@ -3492,11 +3632,25 @@ def get_handlers():
         CallbackQueryHandler(cb_sub_reset_traffic, pattern=r"^adm:sub:reset_traffic:"),
         CallbackQueryHandler(cb_subs_page, pattern=r"^subs_page:"),
         CallbackQueryHandler(cb_adm_users, pattern=r"^adm:users$"),
+        CallbackQueryHandler(cb_users_page, pattern=r"^users:page:"),
         CallbackQueryHandler(cb_user_detail, pattern=r"^user:detail:"),
         CallbackQueryHandler(cb_user_ban, pattern=r"^user:ban:"),
         CallbackQueryHandler(cb_user_unban, pattern=r"^user:unban:"),
         CallbackQueryHandler(cb_user_orders, pattern=r"^user:orders:"),
         CallbackQueryHandler(cb_user_reset_trial, pattern=r"^user:reset_trial:"),
+        ConversationHandler(
+            entry_points=[CallbackQueryHandler(cb_user_wallet_add, pattern=r"^user:wallet_add:")],
+            states={ADMIN_WALLET_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet_add)]},
+            fallbacks=[CallbackQueryHandler(cb_cancel_conv, pattern=r"^cancel$")],
+            per_message=False,
+        ),
+        ConversationHandler(
+            entry_points=[CallbackQueryHandler(cb_user_wallet_remove, pattern=r"^user:wallet_remove:")],
+            states={ADMIN_WALLET_REMOVE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet_remove)]},
+            fallbacks=[CallbackQueryHandler(cb_cancel_conv, pattern=r"^cancel$")],
+            per_message=False,
+        ),
+        CallbackQueryHandler(cb_user_wallet, pattern=r"^user:wallet:[A-Za-z0-9_-]{20}$"),
         CallbackQueryHandler(cb_adm_orders, pattern=r"^adm:orders$"),
         CallbackQueryHandler(cb_orders_list, pattern=r"^orders:list:"),
         CallbackQueryHandler(cb_order_detail, pattern=r"^order:detail:"),
@@ -3538,6 +3692,13 @@ def get_handlers():
         CallbackQueryHandler(cb_adm_logs_page, pattern=r"^adm:logs_page:"),
         CallbackQueryHandler(cb_set_referral, pattern=r"^set:referral$"),
         CallbackQueryHandler(cb_referral_toggle, pattern=r"^set:referral_toggle$"),
+        CallbackQueryHandler(cb_referral_commission_toggle, pattern=r"^set:referral_commission_toggle$"),
+        ConversationHandler(
+            entry_points=[CallbackQueryHandler(cb_referral_commission_pct_prompt, pattern=r"^set:referral_commission_pct$")],
+            states={SETTINGS_REF_COMMISSION_PCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_referral_commission_pct)]},
+            fallbacks=[CallbackQueryHandler(cb_cancel_conv, pattern=r"^cancel$")],
+            per_message=False,
+        ),
         CallbackQueryHandler(cb_ref_pkg_detail, pattern=r"^ref_pkg:detail:"),
         CallbackQueryHandler(cb_ref_pkg_toggle, pattern=r"^ref_pkg:toggle:"),
         CallbackQueryHandler(cb_ref_pkg_delete, pattern=r"^ref_pkg:delete:"),

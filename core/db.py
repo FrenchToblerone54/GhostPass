@@ -60,6 +60,18 @@ def _migrate_v6(db):
     db.execute("PRAGMA user_version=6")
     db.commit()
 
+def _migrate_v7(db):
+    try:
+        db.execute("ALTER TABLE users ADD COLUMN wallet_balance REAL DEFAULT 0.0")
+    except Exception:
+        pass
+    try:
+        db.execute("ALTER TABLE orders ADD COLUMN wallet_credit_used REAL DEFAULT 0.0")
+    except Exception:
+        pass
+    db.execute("PRAGMA user_version=7")
+    db.commit()
+
 async def init_db():
     def _sync():
         with _open() as db:
@@ -78,6 +90,8 @@ async def init_db():
                 _migrate_v5(db)
             if version<6:
                 _migrate_v6(db)
+            if version<7:
+                _migrate_v7(db)
     await asyncio.to_thread(_sync)
 
 async def upsert_user(telegram_id, username, first_name):
@@ -212,7 +226,7 @@ async def get_order(order_id):
     return await asyncio.to_thread(_sync)
 
 async def update_order(order_id, **kwargs):
-    allowed = {"ghostgate_sub_id", "payment_method", "status", "cryptomus_invoice_id", "receipt_file_id", "paid_at", "discount_code", "usage_notified"}
+    allowed = {"ghostgate_sub_id", "payment_method", "status", "cryptomus_invoice_id", "receipt_file_id", "paid_at", "discount_code", "usage_notified", "wallet_credit_used"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
@@ -518,6 +532,31 @@ async def reset_trial_claim_for_user(user_id):
             db.execute("DELETE FROM trial_claims WHERE user_id=?", (user_id,))
             db.commit()
             return count
+    return await asyncio.to_thread(_sync)
+
+async def get_wallet_balance(user_id):
+    def _sync():
+        with _open() as db:
+            row=db.execute("SELECT wallet_balance FROM users WHERE id=?", (user_id,)).fetchone()
+            return float(row[0]) if row and row[0] is not None else 0.0
+    return await asyncio.to_thread(_sync)
+
+async def adjust_wallet(user_id, delta):
+    def _sync():
+        with _open() as db:
+            row=db.execute("SELECT wallet_balance FROM users WHERE id=?", (user_id,)).fetchone()
+            current=float(row[0]) if row and row[0] is not None else 0.0
+            new_bal=max(0.0, current+delta)
+            db.execute("UPDATE users SET wallet_balance=? WHERE id=?", (new_bal, user_id))
+            db.commit()
+            return new_bal
+    return await asyncio.to_thread(_sync)
+
+async def get_referrer_for_user(user_id):
+    def _sync():
+        with _open() as db:
+            row=db.execute("SELECT referrer_id FROM referral_claims WHERE referred_id=?", (user_id,)).fetchone()
+            return row[0] if row else None
     return await asyncio.to_thread(_sync)
 
 async def get_orders_by_invoice(invoice_id):

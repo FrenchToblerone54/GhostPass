@@ -34,8 +34,10 @@ def confirm_reject_kb(order_id):
         InlineKeyboardButton(t("btn_reject"), callback_data=f"order:reject:{order_id}"),
     ]])
 
-def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled, discount_pct=0):
+def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_enabled, discount_pct=0, wallet_balance=0, wallet_use=False, wallet_covers_full=False):
     rows = []
+    if wallet_covers_full:
+        rows.append([InlineKeyboardButton(t("btn_wallet_use", amount=wallet_balance), callback_data=f"buy:wallet:{plan_id}")])
     if card_enabled:
         rows.append([InlineKeyboardButton(t("btn_pay_card"), callback_data=f"buy:card:{plan_id}")])
     if crypto_enabled:
@@ -46,6 +48,11 @@ def plan_buy_kb(plan_id, card_enabled, crypto_enabled, requests_enabled, manual_
         rows.append([InlineKeyboardButton(t("btn_pay_manual"), callback_data=f"buy:manual:{plan_id}")])
     code_label = t("btn_discount_applied", pct=discount_pct) if discount_pct else t("btn_discount_use")
     rows.append([InlineKeyboardButton(code_label, callback_data=f"buy:discount:{plan_id}")])
+    if wallet_balance > 0:
+        if wallet_use:
+            rows.append([InlineKeyboardButton(t("btn_wallet_use", amount=wallet_balance), callback_data=f"buy:wallet_toggle:{plan_id}")])
+        else:
+            rows.append([InlineKeyboardButton(t("btn_wallet_enable", amount=wallet_balance), callback_data=f"buy:wallet_toggle:{plan_id}")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="consumer:plans")])
     return InlineKeyboardMarkup(rows)
 
@@ -148,7 +155,15 @@ def user_actions_kb(uid, is_banned, back_cb):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(ban_label, callback_data=ban_cb)],
         [InlineKeyboardButton(t("btn_adm_orders"), callback_data=f"user:orders:{uid}")],
+        [InlineKeyboardButton(t("btn_wallet_adjust"), callback_data=f"user:wallet:{uid}")],
         [InlineKeyboardButton(t("btn_reset_trial"), callback_data=f"user:reset_trial:{uid}")],
+        [InlineKeyboardButton(t("btn_back"), callback_data=back_cb)],
+    ])
+
+def wallet_adjust_kb(uid, back_cb):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t("btn_wallet_add"), callback_data=f"user:wallet_add:{uid}")],
+        [InlineKeyboardButton(t("btn_wallet_remove"), callback_data=f"user:wallet_remove:{uid}")],
         [InlineKeyboardButton(t("btn_back"), callback_data=back_cb)],
     ])
 
@@ -212,13 +227,15 @@ def referral_pkg_detail_kb(pkg_id, can_redeem):
 def referral_redeem_confirm_kb(pkg_id):
     return InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_yes"), callback_data=f"ref:confirm:{pkg_id}"), InlineKeyboardButton(t("btn_no"), callback_data=f"ref:pkg:{pkg_id}")]])
 
-def referral_settings_kb(enabled, packages):
+def referral_settings_kb(enabled, packages, commission_enabled=False, commission_pct=0):
     rows=[[InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:referral_toggle")]]
     for p in packages:
         status="✅" if p["is_active"] else "❌"
         rows.append([InlineKeyboardButton(f"{status} {p['name']} ({p['credits_required']} cr)", callback_data=f"ref_pkg:detail:{p['id']}")])
     rows.append([InlineKeyboardButton(t("adm_referral_add_pkg"), callback_data="ref_pkg:create")])
     rows.append([InlineKeyboardButton(t("adm_bulk_nodes_btn"), callback_data="ref_pkgs:bulk_nodes")])
+    rows.append([InlineKeyboardButton(t("btn_referral_commission_toggle"), callback_data="set:referral_commission_toggle")])
+    rows.append([InlineKeyboardButton(t("btn_referral_commission_set_pct"), callback_data="set:referral_commission_pct")])
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")])
     return InlineKeyboardMarkup(rows)
 

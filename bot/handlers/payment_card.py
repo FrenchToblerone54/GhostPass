@@ -40,16 +40,24 @@ async def cb_buy_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         effective_price = float(Decimal(str(plan["price"])) - discount)
     else:
         effective_price = plan["price"]
-    amount, code, decimals = await price_for_method(effective_price, "card")
-    price_str = f"{fmt(amount, decimals, code)} {code}"
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    wallet_use = ctx.user_data.pop(f"wallet_use:{plan_id}", False)
+    wallet_deduct = 0.0
+    if wallet_use:
+        wallet_balance = await db.get_wallet_balance(uid)
+        wallet_deduct = min(wallet_balance, effective_price)
+        effective_price = max(0.0, effective_price-wallet_deduct)
+    amount, code, decimals = await price_for_method(effective_price, "card")
+    price_str = f"{fmt(amount, decimals, code)} {code}"
     discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
     ctx.user_data.pop(f"discount_pct:{plan_id}", None)
     ctx.user_data.pop(f"discount_max:{plan_id}", None)
     order_id = await db.create_order(uid, plan_id, "card", float(amount), code)
     if discount_code_used:
         await db.update_order(order_id, discount_code=discount_code_used)
+    if wallet_deduct>0:
+        await db.update_order(order_id, wallet_credit_used=wallet_deduct)
     ctx.user_data["pending_order_id"] = order_id
     text = t("card_payment_info", price=price_str, card_number=card_number, card_holder=card_holder)
     await query.edit_message_text(text, reply_markup=cancel_kb(), parse_mode="Markdown")

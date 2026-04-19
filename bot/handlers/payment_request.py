@@ -42,12 +42,20 @@ async def cb_buy_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
     ctx.user_data.pop(f"discount_pct:{plan_id}", None)
     ctx.user_data.pop(f"discount_max:{plan_id}", None)
-    amount, code, decimals = await price_for_method(effective_price, "request")
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    wallet_use = ctx.user_data.pop(f"wallet_use:{plan_id}", False)
+    wallet_deduct = 0.0
+    if wallet_use:
+        wallet_balance = await db.get_wallet_balance(uid)
+        wallet_deduct = min(wallet_balance, effective_price)
+        effective_price = max(0.0, effective_price-wallet_deduct)
+    amount, code, decimals = await price_for_method(effective_price, "request")
     order_id = await db.create_order(uid, plan_id, "request", float(amount), code)
     if discount_code_used:
         await db.update_order(order_id, discount_code=discount_code_used)
+    if wallet_deduct>0:
+        await db.update_order(order_id, wallet_credit_used=wallet_deduct)
     ctx.user_data["request_order_id"] = order_id
     await query.edit_message_text(t("reason_prompt"), reply_markup=skip_kb("request:skip_reason"))
     asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) submitted a subscription request for plan *{plan['name']}*"))
@@ -130,6 +138,10 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
     if order.get("discount_code"):
         await db.use_discount_code(order["discount_code"])
+    if order.get("wallet_credit_used", 0)>0:
+        await db.adjust_wallet(order["user_id"], -order["wallet_credit_used"])
+    from bot.handlers.admin import _credit_referral_commission
+    asyncio.create_task(_credit_referral_commission(order["user_id"], plan["price"], ctx.bot))
     asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💰 *Request approved*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*"))
     await query.edit_message_text(f"{query.message.text}\n\n✅ Approved", reply_markup=None)
     qr_bytes = await gg.get_subscription_qr_bytes(sub_id)

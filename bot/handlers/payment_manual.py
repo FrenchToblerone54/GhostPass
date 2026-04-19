@@ -53,10 +53,19 @@ async def cb_buy_manual(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
     ctx.user_data.pop(f"discount_pct:{plan_id}", None)
     ctx.user_data.pop(f"discount_max:{plan_id}", None)
+    u_pre = update.effective_user
+    uid_pre = await db.upsert_user(u_pre.id, u_pre.username or "", u_pre.first_name or "")
+    wallet_use = ctx.user_data.pop(f"wallet_use:{plan_id}", False)
+    wallet_deduct = 0.0
+    if wallet_use:
+        wallet_balance = await db.get_wallet_balance(uid_pre)
+        wallet_deduct = min(wallet_balance, effective_price)
+        effective_price = max(0.0, effective_price-wallet_deduct)
     ctx.user_data["manual_discount_code"]=discount_code_used
     ctx.user_data["manual_plan_id"]=plan_id
     ctx.user_data["manual_plan_name"]=plan["name"]
     ctx.user_data["manual_plan_price"]=effective_price
+    ctx.user_data["manual_wallet_deduct"]=wallet_deduct
     rows=[]
     for chain in ("TRC20", "BSC", "POLYGON"):
         if available.get(chain):
@@ -86,6 +95,9 @@ async def cb_select_chain(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     discount_code_used=ctx.user_data.pop("manual_discount_code", None)
     if discount_code_used:
         await db.update_order(order_id, discount_code=discount_code_used)
+    wallet_deduct=ctx.user_data.pop("manual_wallet_deduct", 0.0)
+    if wallet_deduct>0:
+        await db.update_order(order_id, wallet_credit_used=wallet_deduct)
     amount_str=f"{fmt(amount, decimals, code)} {code}"
     ctx.user_data["manual_order_id"]=order_id
     ctx.user_data["manual_amount_str"]=amount_str
@@ -138,7 +150,7 @@ async def cb_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query=update.callback_query
     await query.answer()
     order_id=ctx.user_data.pop("manual_order_id", None)
-    for k in ("manual_chain", "manual_address", "manual_amount_str", "manual_plan_name", "manual_plan_id", "manual_plan_price"):
+    for k in ("manual_chain", "manual_address", "manual_amount_str", "manual_plan_name", "manual_plan_id", "manual_plan_price", "manual_wallet_deduct"):
         ctx.user_data.pop(k, None)
     if order_id:
         await db.update_order(order_id, status="cancelled")
