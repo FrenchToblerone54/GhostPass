@@ -24,13 +24,22 @@ async def cb_buy_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("order_not_found"))
         return ConversationHandler.END
     discount_pct = ctx.user_data.get(f"discount_pct:{plan_id}", 0)
+    discount_max = ctx.user_data.get(f"discount_max:{plan_id}", 0)
     if not discount_pct:
         offer = await db.get_active_offer_for_plan(plan_id)
         if offer:
             discount_pct = offer["discount_percent"]
-    effective_price = float(Decimal(str(plan["price"]))*(1-Decimal(str(discount_pct))/100)) if discount_pct else plan["price"]
+            discount_max = 0
+    if discount_pct:
+        discount = Decimal(str(plan["price"])) * Decimal(str(discount_pct)) / 100
+        if discount_max > 0:
+            discount = min(discount, Decimal(str(discount_max)))
+        effective_price = float(Decimal(str(plan["price"])) - discount)
+    else:
+        effective_price = plan["price"]
     discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
     ctx.user_data.pop(f"discount_pct:{plan_id}", None)
+    ctx.user_data.pop(f"discount_max:{plan_id}", None)
     if discount_code_used:
         await db.use_discount_code(discount_code_used)
     amount, code, decimals = await price_for_method(effective_price, "request")

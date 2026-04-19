@@ -46,7 +46,7 @@ from bot.states import (
     SETTINGS_USDT_TRC20_RATE, SETTINGS_USDT_BSC_RATE, SETTINGS_USDT_POL_RATE,
     ADMIN_SUB_BULK_NOTE_SELECT, ADMIN_SUB_BULK_NOTE_INPUT,
     SETTINGS_TRIAL_DISABLED_MSG, SETTINGS_TRIAL_MAX_CLAIMS,
-    SETTINGS_DISCOUNT_CODE_CODE, SETTINGS_DISCOUNT_CODE_PCT, SETTINGS_DISCOUNT_CODE_MAXUSES,
+    SETTINGS_DISCOUNT_CODE_CODE, SETTINGS_DISCOUNT_CODE_PCT, SETTINGS_DISCOUNT_CODE_MAXUSES, SETTINGS_DISCOUNT_CODE_PLANS, SETTINGS_DISCOUNT_CODE_MAX_AMOUNT,
     PLAN_BULK_ENABLE_DISABLE, PLAN_BULK_PRICE_MULTIPLY, PLAN_BULK_PRICE_FACTOR,
     OFFER_CREATE_NAME, OFFER_CREATE_DISCOUNT, OFFER_CREATE_PLANS,
     SETTINGS_START_MSG,
@@ -2703,8 +2703,14 @@ async def cb_adm_discounts(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     codes = await db.list_discount_codes()
+    plans_lookup = {p["id"]: p["name"] for p in await db.list_plans(active_only=False)}
     if codes:
-        lines = [t("adm_discount_item", code=c["code"], pct=c["discount_percent"], uses=c["uses"], max_uses=c["max_uses"] if c["max_uses"] else "∞", status=t("adm_active") if c["is_active"] else t("adm_inactive")) for c in codes]
+        lines = []
+        for c in codes:
+            plan_ids = c.get("plan_ids") or []
+            plans_str = ", ".join(plans_lookup.get(pid, pid) for pid in plan_ids) if plan_ids else t("adm_all_plans")
+            max_amount = c.get("max_discount_amount") or 0
+            lines.append(t("adm_discount_item", code=c["code"], pct=c["discount_percent"], max_amount=max_amount if max_amount else "∞", uses=c["uses"], max_uses=c["max_uses"] if c["max_uses"] else "∞", plans=plans_str, status=t("adm_active") if c["is_active"] else t("adm_inactive")))
         list_text = "\n".join(lines)
     else:
         list_text = t("adm_discount_none")
@@ -2755,9 +2761,62 @@ async def discount_maxuses_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     except ValueError:
         await update.message.reply_text(t("invalid_input"))
         return SETTINGS_DISCOUNT_CODE_MAXUSES
+    ctx.user_data["new_discount_maxuses"] = val
+    ctx.user_data["new_discount_plan_ids"] = []
+    plans = await db.list_plans(active_only=False)
+    await update.message.reply_text(t("adm_discount_plans_prompt"), reply_markup=_plan_select_kb(plans, [], "discount:plans_done", "cancel", "discount:plans_all", "discount:plans_none"))
+    return SETTINGS_DISCOUNT_CODE_PLANS
+
+async def discount_plan_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plan_id = query.data.split(":", 1)[1]
+    selected = ctx.user_data.get("new_discount_plan_ids", [])
+    if plan_id in selected:
+        selected.remove(plan_id)
+    else:
+        selected.append(plan_id)
+    ctx.user_data["new_discount_plan_ids"] = selected
+    plans = await db.list_plans(active_only=False)
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, selected, "discount:plans_done", "cancel", "discount:plans_all", "discount:plans_none"))
+    return SETTINGS_DISCOUNT_CODE_PLANS
+
+async def discount_plans_all(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plans = await db.list_plans(active_only=False)
+    selected = [p["id"] for p in plans]
+    ctx.user_data["new_discount_plan_ids"] = selected
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, selected, "discount:plans_done", "cancel", "discount:plans_all", "discount:plans_none"))
+    return SETTINGS_DISCOUNT_CODE_PLANS
+
+async def discount_plans_none(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    plans = await db.list_plans(active_only=False)
+    ctx.user_data["new_discount_plan_ids"] = []
+    await query.edit_message_reply_markup(reply_markup=_plan_select_kb(plans, [], "discount:plans_done", "cancel", "discount:plans_all", "discount:plans_none"))
+    return SETTINGS_DISCOUNT_CODE_PLANS
+
+async def discount_plans_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_discount_max_amount_prompt"), reply_markup=cancel_kb())
+    return SETTINGS_DISCOUNT_CODE_MAX_AMOUNT
+
+async def discount_max_amount_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val = float(update.message.text.strip())
+        if val<0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_DISCOUNT_CODE_MAX_AMOUNT
     code = ctx.user_data.pop("new_discount_code", "")
     pct = ctx.user_data.pop("new_discount_pct", 0)
-    await db.create_discount_code(code, pct, val)
+    max_uses = ctx.user_data.pop("new_discount_maxuses", 0)
+    plan_ids = ctx.user_data.pop("new_discount_plan_ids", [])
+    await db.create_discount_code(code, pct, max_uses, plan_ids, val)
     await update.message.reply_text(t("adm_discount_created", code=code), reply_markup=back_kb("adm:discounts"), parse_mode="Markdown")
     return ConversationHandler.END
 
@@ -3254,6 +3313,13 @@ def get_main_conv_handler():
         SETTINGS_DISCOUNT_CODE_CODE: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_code_input)],
         SETTINGS_DISCOUNT_CODE_PCT: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_pct_input)],
         SETTINGS_DISCOUNT_CODE_MAXUSES: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_maxuses_input)],
+        SETTINGS_DISCOUNT_CODE_PLANS: [
+            CallbackQueryHandler(discount_plan_toggle, pattern=r"^plan_select:"),
+            CallbackQueryHandler(discount_plans_all, pattern=r"^discount:plans_all$"),
+            CallbackQueryHandler(discount_plans_none, pattern=r"^discount:plans_none$"),
+            CallbackQueryHandler(discount_plans_done, pattern=r"^discount:plans_done$"),
+        ],
+        SETTINGS_DISCOUNT_CODE_MAX_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, discount_max_amount_input)],
         PLAN_BULK_ENABLE_DISABLE: [
             CallbackQueryHandler(plans_bulk_toggle_plan, pattern=r"^plan_select:"),
             CallbackQueryHandler(plans_bulk_toggle_all, pattern=r"^plans:bulk_toggle_all$"),

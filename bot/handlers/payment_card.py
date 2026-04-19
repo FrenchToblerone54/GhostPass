@@ -25,17 +25,26 @@ async def cb_buy_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     card_number = await db.get_setting("card_number", "")
     card_holder = await db.get_setting("card_holder", "")
     discount_pct = ctx.user_data.get(f"discount_pct:{plan_id}", 0)
+    discount_max = ctx.user_data.get(f"discount_max:{plan_id}", 0)
     if not discount_pct:
         offer = await db.get_active_offer_for_plan(plan_id)
         if offer:
             discount_pct = offer["discount_percent"]
-    effective_price = float(Decimal(str(plan["price"]))*(1-Decimal(str(discount_pct))/100)) if discount_pct else plan["price"]
+            discount_max = 0
+    if discount_pct:
+        discount = Decimal(str(plan["price"])) * Decimal(str(discount_pct)) / 100
+        if discount_max > 0:
+            discount = min(discount, Decimal(str(discount_max)))
+        effective_price = float(Decimal(str(plan["price"])) - discount)
+    else:
+        effective_price = plan["price"]
     amount, code, decimals = await price_for_method(effective_price, "card")
     price_str = f"{fmt(amount, decimals, code)} {code}"
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
     discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
     ctx.user_data.pop(f"discount_pct:{plan_id}", None)
+    ctx.user_data.pop(f"discount_max:{plan_id}", None)
     if discount_code_used:
         await db.use_discount_code(discount_code_used)
     order_id = await db.create_order(uid, plan_id, "card", float(amount), code)

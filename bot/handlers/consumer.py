@@ -612,11 +612,20 @@ async def discount_code_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if code["max_uses"]>0 and code["uses"]>=code["max_uses"]:
         await update.message.reply_text(t("discount_exhausted"))
         return ConversationHandler.END
+    plan_ids = code.get("plan_ids") or []
+    if plan_ids and plan_id not in plan_ids:
+        await update.message.reply_text(t("discount_wrong_plan"))
+        return ConversationHandler.END
     ctx.user_data[f"discount_pct:{plan_id}"] = code["discount_percent"]
     ctx.user_data[f"discount_code:{plan_id}"] = code["code"]
+    ctx.user_data[f"discount_max:{plan_id}"] = code.get("max_discount_amount") or 0
     plan = await db.get_plan(plan_id)
     if plan:
-        effective = float(Decimal(str(plan["price"]))*(1-Decimal(str(code["discount_percent"]))/100))
+        max_amount = code.get("max_discount_amount") or 0
+        discount = Decimal(str(plan["price"])) * Decimal(str(code["discount_percent"])) / 100
+        if max_amount > 0:
+            discount = min(discount, Decimal(str(max_amount)))
+        effective = float(Decimal(str(plan["price"])) - discount)
         from core.currency import get_base_currency, fmt
         base = await get_base_currency()
         price_str = f"{fmt(Decimal(str(effective)), 0, base)} {base}"

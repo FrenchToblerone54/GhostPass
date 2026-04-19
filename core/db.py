@@ -48,6 +48,12 @@ def _migrate_v4(db):
     db.execute("PRAGMA user_version=4")
     db.commit()
 
+def _migrate_v5(db):
+    db.execute("ALTER TABLE discount_codes ADD COLUMN plan_ids TEXT NOT NULL DEFAULT '[]'")
+    db.execute("ALTER TABLE discount_codes ADD COLUMN max_discount_amount REAL DEFAULT 0")
+    db.execute("PRAGMA user_version=5")
+    db.commit()
+
 async def init_db():
     def _sync():
         with _open() as db:
@@ -62,6 +68,8 @@ async def init_db():
                 _migrate_v3(db)
             if version<4:
                 _migrate_v4(db)
+            if version<5:
+                _migrate_v5(db)
     await asyncio.to_thread(_sync)
 
 async def upsert_user(telegram_id, username, first_name):
@@ -422,10 +430,10 @@ async def get_active_offer_for_plan(plan_id):
             return None
     return await asyncio.to_thread(_sync)
 
-async def create_discount_code(code, discount_percent, max_uses=0):
+async def create_discount_code(code, discount_percent, max_uses=0, plan_ids=None, max_discount_amount=0):
     def _sync():
         with _open() as db:
-            db.execute("INSERT INTO discount_codes (code, discount_percent, max_uses) VALUES (?,?,?)", (code.upper(), discount_percent, max_uses))
+            db.execute("INSERT INTO discount_codes (code, discount_percent, max_uses, plan_ids, max_discount_amount) VALUES (?,?,?,?,?)", (code.upper(), discount_percent, max_uses, json.dumps(plan_ids or []), max_discount_amount))
             db.commit()
     await asyncio.to_thread(_sync)
 
@@ -433,7 +441,11 @@ async def get_discount_code(code):
     def _sync():
         with _open() as db:
             row=db.execute("SELECT * FROM discount_codes WHERE code=?", (code.upper(),)).fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            d=dict(row)
+            d["plan_ids"]=json.loads(d.get("plan_ids") or "[]")
+            return d
     return await asyncio.to_thread(_sync)
 
 async def use_discount_code(code):
@@ -447,7 +459,12 @@ async def list_discount_codes():
     def _sync():
         with _open() as db:
             rows=db.execute("SELECT * FROM discount_codes ORDER BY created_at DESC").fetchall()
-            return [dict(r) for r in rows]
+            result=[]
+            for r in rows:
+                d=dict(r)
+                d["plan_ids"]=json.loads(d.get("plan_ids") or "[]")
+                result.append(d)
+            return result
     return await asyncio.to_thread(_sync)
 
 async def delete_discount_code(code):
