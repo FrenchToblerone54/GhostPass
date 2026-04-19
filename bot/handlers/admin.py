@@ -1327,6 +1327,17 @@ async def cb_user_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data=f"user:detail:{uid}")])
     await query.edit_message_text(t("adm_user_orders_title"), reply_markup=InlineKeyboardMarkup(rows))
 
+async def cb_user_reset_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.data.split(":", 2)[2]
+    count = await db.reset_trial_claim_for_user(uid)
+    if count:
+        await db.log_admin_action(update.effective_user.id, "reset_trial", uid)
+        await query.answer(t("adm_trial_reset_user_done"), show_alert=True)
+    else:
+        await query.answer(t("adm_trial_no_claim"), show_alert=True)
+
 async def cb_adm_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -3485,6 +3496,7 @@ def get_handlers():
         CallbackQueryHandler(cb_user_ban, pattern=r"^user:ban:"),
         CallbackQueryHandler(cb_user_unban, pattern=r"^user:unban:"),
         CallbackQueryHandler(cb_user_orders, pattern=r"^user:orders:"),
+        CallbackQueryHandler(cb_user_reset_trial, pattern=r"^user:reset_trial:"),
         CallbackQueryHandler(cb_adm_orders, pattern=r"^adm:orders$"),
         CallbackQueryHandler(cb_orders_list, pattern=r"^orders:list:"),
         CallbackQueryHandler(cb_order_detail, pattern=r"^order:detail:"),

@@ -148,6 +148,7 @@ def user_actions_kb(uid, is_banned, back_cb):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(ban_label, callback_data=ban_cb)],
         [InlineKeyboardButton(t("btn_adm_orders"), callback_data=f"user:orders:{uid}")],
+        [InlineKeyboardButton(t("btn_reset_trial"), callback_data=f"user:reset_trial:{uid}")],
         [InlineKeyboardButton(t("btn_back"), callback_data=back_cb)],
     ])
 

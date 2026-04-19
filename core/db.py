@@ -511,6 +511,15 @@ async def reset_trial_claims():
             return count
     return await asyncio.to_thread(_sync)
 
+async def reset_trial_claim_for_user(user_id):
+    def _sync():
+        with _open() as db:
+            count=db.execute("SELECT COUNT(*) FROM trial_claims WHERE user_id=?", (user_id,)).fetchone()[0]
+            db.execute("DELETE FROM trial_claims WHERE user_id=?", (user_id,))
+            db.commit()
+            return count
+    return await asyncio.to_thread(_sync)
+
 async def get_orders_by_invoice(invoice_id):
     def _sync():
         with _open() as db:
