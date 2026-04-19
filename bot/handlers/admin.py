@@ -1251,7 +1251,7 @@ async def cb_adm_users(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     users, total = await db.list_users(limit=5)
     text = f"👥 *Users* ({total} total)\n\nRecent users:\n"
     for u in users:
-        uname = f"@{u['username']}" if u.get("username") else str(u["telegram_id"])
+        uname = f"@{u['username'].replace('_', '\\_')}" if u.get("username") else str(u["telegram_id"])
         text += f"• {u.get('first_name') or ''} {uname}\n"
     rows = [[InlineKeyboardButton(t("adm_search_user_btn"), callback_data="users:search")], [InlineKeyboardButton(t("btn_back"), callback_data="adm:back")]]
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
