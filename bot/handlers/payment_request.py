@@ -83,14 +83,14 @@ async def _notify_admins(order_id, reason, update, ctx):
     order = await db.get_order(order_id)
     if not order:
         return
-    plan = await db.get_plan(order["plan_id"])
+    plan = await db.get_plan(order["plan_id"]) if order.get("plan_id") else None
     u = update.effective_user
     caption = t(
         "request_caption",
         first_name=u.first_name or "",
         username=f"@{u.username.lstrip('@')}" if u.username else str(u.id),
         telegram_id=u.id,
-        plan_name=plan["name"] if plan else order["plan_id"],
+        plan_name=plan["name"] if plan else t("wallet_topup_label"),
         reason=reason or t("request_no_reason")
     )
     kb = InlineKeyboardMarkup([[
@@ -113,9 +113,22 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not order or order["status"]!="pending":
         await query.edit_message_text(t("adm_already_processed"))
         return
-    plan = await db.get_plan(order["plan_id"])
     user = await db.get_user_by_id(order["user_id"])
-    if not plan or not user:
+    if not user:
+        return
+    if not order.get("plan_id"):
+        await db.adjust_wallet(order["user_id"], order["amount"])
+        await db.update_order(order_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
+        new_balance = await db.get_wallet_balance(order["user_id"])
+        asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💳 *Wallet top-up confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n💰 Amount: {order['amount']} {order['currency']}"))
+        try:
+            await ctx.bot.send_message(user["telegram_id"], t("wallet_topup_confirmed", amount=order["amount"], balance=new_balance))
+        except Exception:
+            pass
+        await query.edit_message_text(f"{query.message.text}\n\n✅ Approved", reply_markup=None)
+        return
+    plan = await db.get_plan(order["plan_id"])
+    if not plan:
         return
     expire_after_first_use_seconds=None
     if int(plan["days"])>0 and await db.get_setting("plan_start_after_use", "0")=="1":
@@ -151,6 +164,25 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         await ctx.bot.send_message(user["telegram_id"], t("request_approved", url=sub_url), parse_mode="Markdown")
 
+async def cb_walletpay_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return ConversationHandler.END
+    amount_raw = ctx.user_data.get("wallet_topup_amount")
+    if not amount_raw:
+        await query.edit_message_text(t("order_not_found"))
+        return ConversationHandler.END
+    u = update.effective_user
+    uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    amount, code, decimals = await price_for_method(float(amount_raw), "request")
+    order_id = await db.create_order(uid, None, "request", float(amount), code)
+    ctx.user_data["request_order_id"] = order_id
+    ctx.user_data.pop("wallet_topup_amount", None)
+    await query.edit_message_text(t("reason_prompt"), reply_markup=skip_kb("request:skip_reason"))
+    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) submitted a wallet top-up request"))
+    return REQUEST_REASON
+
 async def cb_decline_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -167,7 +199,10 @@ async def cb_decline_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 def get_request_conv_handler():
     return ConversationHandler(
-        entry_points=[CallbackQueryHandler(cb_buy_request, pattern=r"^buy:request:")],
+        entry_points=[
+            CallbackQueryHandler(cb_buy_request, pattern=r"^buy:request:"),
+            CallbackQueryHandler(cb_walletpay_request, pattern=r"^walletpay:request$"),
+        ],
         states={REQUEST_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reason)]},
         fallbacks=[CallbackQueryHandler(cb_skip_reason, pattern=r"^request:skip_reason$")],
         per_message=False

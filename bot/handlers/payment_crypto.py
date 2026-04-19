@@ -249,9 +249,22 @@ async def _activate_order(order_id, telegram_id, bot):
     order = await db.get_order(order_id)
     if not order or order["status"]!="pending":
         return
-    plan = await db.get_plan(order["plan_id"])
     user = await db.get_user_by_id(order["user_id"])
-    if not plan or not user:
+    if not user:
+        return
+    if not order.get("plan_id"):
+        now = datetime.now(timezone.utc).isoformat()
+        await db.adjust_wallet(order["user_id"], order["amount"])
+        await db.update_order(order_id, status="paid", paid_at=now)
+        new_balance = await db.get_wallet_balance(order["user_id"])
+        asyncio.create_task(admin_event(bot, "notify_purchase", f"💳 *Wallet top-up confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n💰 Amount: {order['amount']} {order['currency']}"))
+        try:
+            await bot.send_message(telegram_id, t("wallet_topup_confirmed", amount=order["amount"], balance=new_balance))
+        except Exception as e:
+            logger.error("Failed to notify user %s: %s", telegram_id, e)
+        return
+    plan = await db.get_plan(order["plan_id"])
+    if not plan:
         return
     expire_after_first_use_seconds=None
     if int(plan["days"])>0 and await db.get_setting("plan_start_after_use", "0")=="1":
@@ -292,6 +305,89 @@ async def _activate_order(order_id, telegram_id, bot):
         await bot.send_photo(telegram_id, photo=io.BytesIO(qr_bytes), caption=t("crypto_paid", url=sub_url), parse_mode="Markdown")
     else:
         await bot.send_message(telegram_id, t("crypto_paid", url=sub_url), parse_mode="Markdown")
+
+async def cb_walletpay_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return
+    amount_raw = ctx.user_data.get("wallet_topup_amount")
+    if not amount_raw:
+        await query.edit_message_text(t("order_not_found"))
+        return
+    merchant_id = await db.get_setting("cryptomus_merchant_id", "")
+    api_key = await db.get_setting("cryptomus_api_key", "")
+    btcpay_url = settings.BTCPAY_URL or await db.get_setting("btcpay_url", "")
+    btcpay_store = settings.BTCPAY_STORE_ID or await db.get_setting("btcpay_store_id", "")
+    btcpay_key = settings.BTCPAY_API_KEY or await db.get_setting("btcpay_api_key", "")
+    gp_url = settings.GHOSTPAYMENTS_URL or await db.get_setting("ghostpayments_url", "")
+    gp_key = settings.GHOSTPAYMENTS_API_KEY or await db.get_setting("ghostpayments_api_key", "")
+    gp_enabled = await db.get_setting("ghostpayments_enabled", "0")=="1"
+    use_ghostpayments=bool(gp_enabled and gp_url and gp_key)
+    use_btcpay=bool(btcpay_url and btcpay_store and btcpay_key)
+    if not use_ghostpayments and not use_btcpay and (not merchant_id or not api_key):
+        await query.edit_message_text(t("service_unavailable"))
+        return
+    effective_price = float(amount_raw)
+    if use_ghostpayments:
+        from core.currency import get_enabled_gp_pairs, price_for_gp_pair
+        enabled_pairs = await get_enabled_gp_pairs()
+        if len(enabled_pairs)>1:
+            rows = [[InlineKeyboardButton(f"{p['chain']}/{p['token']}", callback_data=f"walletpay:gp:{p['chain']}:{p['token']}")] for p in enabled_pairs]
+            rows.append([InlineKeyboardButton(t("btn_back"), callback_data="wallet:panel")])
+            ctx.user_data["wallet_topup_amount"] = effective_price
+            await query.edit_message_text(t("gp_pair_select_title"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+            return
+        elif len(enabled_pairs)==1:
+            gp_chain, gp_token = enabled_pairs[0]["chain"], enabled_pairs[0]["token"]
+        else:
+            use_ghostpayments, gp_chain, gp_token = False, "", ""
+    else:
+        gp_chain, gp_token = "", ""
+    ctx.user_data.pop("wallet_topup_amount", None)
+    if use_ghostpayments:
+        from core.currency import price_for_gp_pair
+        gp_amount, gp_code, gp_decimals = await price_for_gp_pair(effective_price, gp_chain, gp_token)
+        if gp_amount is None:
+            if use_btcpay or (merchant_id and api_key):
+                use_ghostpayments=False
+            else:
+                await query.edit_message_text(t("ghostpayments_no_rate", chain=gp_chain, token=gp_token), parse_mode="Markdown")
+                return
+    if not use_ghostpayments:
+        gp_amount, gp_code, gp_decimals = None, "", 0
+    amount, code, decimals = await price_for_method(effective_price, "crypto")
+    price_str = f"{fmt(gp_amount, gp_decimals, gp_code)} {gp_code}" if use_ghostpayments else f"{fmt(amount, decimals, code)} {code}"
+    u = update.effective_user
+    uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    order_id = await db.create_order(uid, None, "crypto", float(gp_amount if use_ghostpayments else amount), gp_code if use_ghostpayments else code)
+    try:
+        if use_ghostpayments:
+            inv=await create_invoice_ghostpayments(gp_url, gp_key, gp_chain, gp_token, fmt(gp_amount, gp_decimals, gp_code), order_id)
+            invoice_id=inv.get("invoice_id") or inv.get("id")
+            pay_url=inv.get("payment_url")
+        elif use_btcpay:
+            inv=await create_invoice_btcpay(order_id, fmt(amount, decimals, code), code, btcpay_url, btcpay_store, btcpay_key)
+            invoice_id=inv.get("id")
+            pay_url=inv.get("checkoutLink")
+        else:
+            result = await create_invoice(order_id, fmt(amount, decimals, code), code, merchant_id, api_key)
+            inv = result.get("result", {})
+            invoice_id = inv.get("uuid")
+            pay_url = inv.get("url")
+    except Exception as e:
+        logger.error("Crypto invoice error: %s", e)
+        await query.edit_message_text(t("ghostgate_error"))
+        return
+    if not invoice_id or not pay_url:
+        await query.edit_message_text(t("ghostgate_error"))
+        return
+    await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_open_payment"), url=pay_url)]])
+    await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
+    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated crypto payment for wallet top-up — {price_str}"))
+    provider="ghostpayments" if use_ghostpayments else ("btcpay" if use_btcpay else "cryptomus")
+    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key, gp_url))
 
 async def _webhook_handler(request):
     try:
@@ -336,4 +432,4 @@ async def run_webhook_server(bot=None):
     logger.info("Cryptomus webhook server started on port 8090")
 
 def get_handlers():
-    return [CallbackQueryHandler(cb_buy_crypto, pattern=r"^buy:crypto:"), CallbackQueryHandler(cb_buy_gp_pick, pattern=r"^buy:gp:")]
+    return [CallbackQueryHandler(cb_buy_crypto, pattern=r"^buy:crypto:"), CallbackQueryHandler(cb_buy_gp_pick, pattern=r"^buy:gp:"), CallbackQueryHandler(cb_walletpay_crypto, pattern=r"^walletpay:crypto$")]

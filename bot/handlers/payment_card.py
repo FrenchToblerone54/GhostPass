@@ -87,7 +87,7 @@ async def handle_receipt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         first_name=u.first_name or "",
         username=f"@{u.username.lstrip('@')}" if u.username else str(u.id),
         telegram_id=u.id,
-        plan_name=plan["name"] if plan else order["plan_id"],
+        plan_name=plan["name"] if plan else t("wallet_topup_label"),
         amount=amount_str
     )
     from bot.keyboards import confirm_reject_kb
@@ -101,6 +101,29 @@ async def handle_receipt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.pop("pending_order_id", None)
     return ConversationHandler.END
 
+async def cb_walletpay_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return ConversationHandler.END
+    amount_raw = ctx.user_data.get("wallet_topup_amount")
+    if not amount_raw:
+        await query.edit_message_text(t("order_not_found"))
+        return ConversationHandler.END
+    card_number = await db.get_setting("card_number", "")
+    card_holder = await db.get_setting("card_holder", "")
+    amount, code, decimals = await price_for_method(float(amount_raw), "card")
+    price_str = f"{fmt(amount, decimals, code)} {code}"
+    u = update.effective_user
+    uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
+    order_id = await db.create_order(uid, None, "card", float(amount), code)
+    ctx.user_data["pending_order_id"] = order_id
+    ctx.user_data.pop("wallet_topup_amount", None)
+    text = t("card_payment_info", price=price_str, card_number=card_number, card_holder=card_holder)
+    await query.edit_message_text(text, reply_markup=cancel_kb(), parse_mode="Markdown")
+    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated card payment for wallet top-up — {price_str}"))
+    return CARD_WAIT_RECEIPT
+
 async def cb_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -112,7 +135,10 @@ async def cb_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 def get_card_conv_handler():
     return ConversationHandler(
-        entry_points=[CallbackQueryHandler(cb_buy_card, pattern=r"^buy:card:")],
+        entry_points=[
+            CallbackQueryHandler(cb_buy_card, pattern=r"^buy:card:"),
+            CallbackQueryHandler(cb_walletpay_card, pattern=r"^walletpay:card$"),
+        ],
         states={CARD_WAIT_RECEIPT: [MessageHandler(filters.PHOTO, handle_receipt)]},
         fallbacks=[CallbackQueryHandler(cb_cancel, pattern=r"^cancel$")],
         per_message=False

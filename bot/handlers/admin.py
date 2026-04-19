@@ -1434,16 +1434,38 @@ async def cb_adm_orders(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ]
     await query.edit_message_text(t("adm_orders_title", count=len(pending)), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
 
+_ORDERS_PER_PAGE = 10
+
 async def cb_orders_list(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     status = query.data.split(":", 2)[2]
-    orders, total = await db.list_orders(status=None if status=="waiting_confirm" else status, limit=20)
-    if status=="waiting_confirm":
-        orders = [o for o in orders if o["status"] in ("pending", "waiting_confirm")]
-    rows = [[InlineKeyboardButton(f"{o.get('plan_name','?')} — {o.get('first_name','?')} — {o['status']}", callback_data=f"order:detail:{o['id']}")] for o in orders[:20]]
+    ctx.user_data["orders_list_status"] = status
+    ctx.user_data["orders_list_page"] = 0
+    await _show_orders_page(query, ctx)
+
+async def cb_orders_list_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    direction = query.data.split(":", 2)[2]
+    page = ctx.user_data.get("orders_list_page", 0)
+    ctx.user_data["orders_list_page"] = max(0, page+(1 if direction=="next" else -1))
+    await _show_orders_page(query, ctx)
+
+async def _show_orders_page(query, ctx):
+    status = ctx.user_data.get("orders_list_status", "waiting_confirm")
+    page = ctx.user_data.get("orders_list_page", 0)
+    orders, total = await db.list_orders(status=status, offset=page*_ORDERS_PER_PAGE, limit=_ORDERS_PER_PAGE)
+    rows = [[InlineKeyboardButton(f"{o.get('plan_name') or t('wallet_topup_label')} — {o.get('first_name','?')} — {o['status']}", callback_data=f"order:detail:{o['id']}")] for o in orders]
+    nav = []
+    if page>0:
+        nav.append(InlineKeyboardButton("◀️", callback_data="orders:page:prev"))
+    if (page+1)*_ORDERS_PER_PAGE<total:
+        nav.append(InlineKeyboardButton("▶️", callback_data="orders:page:next"))
+    if nav:
+        rows.append(nav)
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:orders")])
-    await query.edit_message_text(t("adm_orders_count", count=len(orders)), reply_markup=InlineKeyboardMarkup(rows))
+    await query.edit_message_text(t("adm_orders_count", count=total), reply_markup=InlineKeyboardMarkup(rows))
 
 async def cb_order_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1454,12 +1476,12 @@ async def cb_order_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("order_not_found"))
         return
     user = await db.get_user_by_id(order["user_id"])
-    plan = await db.get_plan(order["plan_id"])
+    plan = await db.get_plan(order["plan_id"]) if order.get("plan_id") else None
     uname = f"@{user['username']}" if user and user.get("username") else str(user["telegram_id"] if user else "?")
     text = t("adm_order_detail",
         order_id=order_id,
         user=uname,
-        plan=plan["name"] if plan else "?",
+        plan=plan["name"] if plan else t("wallet_topup_label"),
         amount=f"{cfmt(Decimal(str(order['amount'])), 0, order['currency'])} {order['currency']}",
         method=order["payment_method"],
         status=order["status"],
@@ -1476,6 +1498,21 @@ async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     order = await db.get_order(order_id)
     if not order or order["status"] not in ("pending", "waiting_confirm"):
         await query.answer(t("adm_already_processed"), show_alert=True)
+        return
+    if not order.get("plan_id"):
+        await db.adjust_wallet(order["user_id"], order["amount"])
+        await db.update_order(order_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
+        user = await db.get_user_by_id(order["user_id"])
+        new_balance = await db.get_wallet_balance(order["user_id"])
+        asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💳 *Wallet top-up confirmed*\n\n👤 {user.get('first_name','') if user else ''} (`{user['telegram_id'] if user else '?'}`)\n💰 Amount: {order['amount']} {order['currency']}"))
+        try:
+            await ctx.bot.send_message(user["telegram_id"], t("wallet_topup_confirmed", amount=order["amount"], balance=new_balance))
+        except Exception:
+            pass
+        try:
+            await query.edit_message_text(t("adm_wallet_adjusted", balance=new_balance), reply_markup=None)
+        except Exception:
+            pass
         return
     plan = await db.get_plan(order["plan_id"])
     user = await db.get_user_by_id(order["user_id"])
@@ -2958,7 +2995,7 @@ async def _show_logs(query, ctx):
     page = ctx.user_data.get("logs_page", 0)
     logs, total = await db.list_admin_logs(offset=page * _LOG_PER_PAGE, limit=_LOG_PER_PAGE)
     if logs:
-        lines = "\n".join(t("adm_log_entry", created_at=l["created_at"][:16], admin_id=l["admin_id"], action=l["action"], details=f" — {l['details']}" if l.get("details") else "") for l in logs)
+        lines = "\n".join(t("adm_log_entry", created_at=l["created_at"][:16], admin_id=l["admin_id"], action=l["action"], details=f" — {(l['details'] or '').replace('_', chr(92)+'_')}" if l.get("details") else "") for l in logs)
     else:
         lines = t("adm_logs_empty")
     await query.edit_message_text(t("adm_logs_title", entries=lines), reply_markup=logs_kb(page, total, _LOG_PER_PAGE), parse_mode="Markdown")
@@ -3653,6 +3690,7 @@ def get_handlers():
         CallbackQueryHandler(cb_user_wallet, pattern=r"^user:wallet:[A-Za-z0-9_-]{20}$"),
         CallbackQueryHandler(cb_adm_orders, pattern=r"^adm:orders$"),
         CallbackQueryHandler(cb_orders_list, pattern=r"^orders:list:"),
+        CallbackQueryHandler(cb_orders_list_page, pattern=r"^orders:page:(prev|next)$"),
         CallbackQueryHandler(cb_order_detail, pattern=r"^order:detail:"),
         CallbackQueryHandler(cb_confirm_order, pattern=r"^order:confirm:"),
         CallbackQueryHandler(cb_adm_admins, pattern=r"^adm:admins$"),

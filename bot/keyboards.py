@@ -12,7 +12,7 @@ def _fmt_plan_price(price, base_currency):
     return str(price)
 
 def main_consumer_kb():
-    return ReplyKeyboardMarkup([[t("btn_consumer_trial")], [t("btn_consumer_plans"), t("btn_consumer_status")], [t("btn_consumer_referral"), t("btn_consumer_support")]], resize_keyboard=True)
+    return ReplyKeyboardMarkup([[t("btn_consumer_trial")], [t("btn_consumer_plans"), t("btn_consumer_status")], [t("btn_consumer_referral"), t("btn_consumer_support")], [t("btn_consumer_wallet")]], resize_keyboard=True)
 
 def main_admin_kb():
     return InlineKeyboardMarkup([
@@ -166,6 +166,22 @@ def wallet_adjust_kb(uid, back_cb):
         [InlineKeyboardButton(t("btn_wallet_remove"), callback_data=f"user:wallet_remove:{uid}")],
         [InlineKeyboardButton(t("btn_back"), callback_data=back_cb)],
     ])
+
+def wallet_panel_kb():
+    return InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_wallet_add_balance"), callback_data="wallet:topup")]])
+
+def wallet_topup_pay_kb(amount, card_enabled, crypto_enabled, requests_enabled, manual_enabled):
+    rows = []
+    if card_enabled:
+        rows.append([InlineKeyboardButton(t("btn_pay_card"), callback_data="walletpay:card")])
+    if crypto_enabled:
+        rows.append([InlineKeyboardButton(t("btn_pay_crypto"), callback_data="walletpay:crypto")])
+    if requests_enabled:
+        rows.append([InlineKeyboardButton(t("btn_request_sub"), callback_data="walletpay:request")])
+    if manual_enabled:
+        rows.append([InlineKeyboardButton(t("btn_pay_manual"), callback_data="walletpay:manual")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="wallet:panel")])
+    return InlineKeyboardMarkup(rows)
 
 def plan_actions_kb(plan_id, is_active):
     toggle_label = t("btn_deactivate") if is_active else t("btn_activate")

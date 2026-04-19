@@ -8,11 +8,11 @@ import core.db as db
 import core.ghostgate as gg
 from core.currency import get_base_currency, fmt_price_for_method, price_for_method, fmt
 from decimal import Decimal
-from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb, subs_list_kb, sub_detail_kb, referral_panel_kb, referral_packages_kb, referral_pkg_detail_kb, referral_redeem_confirm_kb
+from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb, subs_list_kb, sub_detail_kb, referral_panel_kb, referral_packages_kb, referral_pkg_detail_kb, referral_redeem_confirm_kb, wallet_panel_kb, wallet_topup_pay_kb
 from bot.strings import t
 from bot.guards import ensure_force_join, check_force_join
 from bot.notifications import admin_event
-from bot.states import CONSUMER_DISCOUNT_INPUT
+from bot.states import CONSUMER_DISCOUNT_INPUT, CONSUMER_WALLET_TOPUP_AMOUNT
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -635,6 +635,59 @@ async def cb_referral_back(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+async def cmd_wallet(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = await _ensure_user(update)
+    if await _check_banned(update):
+        return
+    if not await ensure_force_join(update, ctx):
+        return
+    balance = await db.get_wallet_balance(uid)
+    await update.message.reply_text(t("wallet_panel", balance=balance), reply_markup=wallet_panel_kb(), parse_mode="Markdown")
+
+async def cb_wallet_panel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = await db.upsert_user(query.from_user.id, query.from_user.username or "", query.from_user.first_name or "")
+    balance = await db.get_wallet_balance(uid)
+    await query.edit_message_text(t("wallet_panel", balance=balance), reply_markup=wallet_panel_kb(), parse_mode="Markdown")
+
+async def cb_wallet_topup_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("wallet_topup_prompt"), reply_markup=back_kb("wallet:panel"))
+    return CONSUMER_WALLET_TOPUP_AMOUNT
+
+async def handle_wallet_topup_amount(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    try:
+        amount = float(text.replace(",", ""))
+        if amount<=0:
+            raise ValueError
+    except (ValueError, TypeError):
+        await update.message.reply_text(t("wallet_topup_invalid"))
+        return CONSUMER_WALLET_TOPUP_AMOUNT
+    ctx.user_data["wallet_topup_amount"] = amount
+    base = await get_base_currency()
+    card_enabled = await db.get_setting("card_enabled", "0")=="1"
+    crypto_enabled = (await db.get_setting("cryptomus_enabled", "0")=="1") or (await db.get_setting("ghostpayments_enabled", "0")=="1")
+    requests_enabled = await db.get_setting("requests_enabled", "0")=="1"
+    manual_enabled = await db.get_setting("manual_enabled", "1")=="1"
+    amount_str = f"{fmt(Decimal(str(amount)), 0, base)} {base}"
+    await update.message.reply_text(
+        t("wallet_topup_pay_title", amount=amount_str),
+        reply_markup=wallet_topup_pay_kb(amount, card_enabled, crypto_enabled, requests_enabled, manual_enabled),
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+def _get_wallet_topup_conv():
+    return ConversationHandler(
+        entry_points=[CallbackQueryHandler(cb_wallet_topup_start, pattern=r"^wallet:topup$")],
+        states={CONSUMER_WALLET_TOPUP_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_wallet_topup_amount)]},
+        fallbacks=[CallbackQueryHandler(cb_wallet_panel, pattern=r"^wallet:panel$")],
+        per_message=False
+    )
+
 async def handle_menu_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     if text==t("btn_consumer_plans"):
@@ -647,6 +700,8 @@ async def handle_menu_buttons(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await cmd_trial(update, ctx)
     elif text==t("btn_consumer_referral"):
         await cmd_referral(update, ctx)
+    elif text==t("btn_consumer_wallet"):
+        await cmd_wallet(update, ctx)
 
 async def cb_force_join_check(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -733,11 +788,13 @@ def _get_discount_conv():
 
 def get_handlers():
     return [
+        _get_wallet_topup_conv(),
         _get_discount_conv(),
         CommandHandler("start", cmd_start),
         CommandHandler("plans", cmd_plans),
         CommandHandler("mystatus", cmd_mystatus),
         CommandHandler("support", cmd_support),
+        CommandHandler("wallet", cmd_wallet),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_buttons),
         CallbackQueryHandler(cb_plan_detail, pattern=r"^plan:[A-Za-z0-9_-]{20}$"),
         CallbackQueryHandler(cb_consumer_plans, pattern=r"^consumer:plans$"),
@@ -762,4 +819,5 @@ def get_handlers():
         CallbackQueryHandler(cb_referral_back, pattern=r"^ref:back$"),
         CallbackQueryHandler(cb_wallet_toggle, pattern=r"^buy:wallet_toggle:"),
         CallbackQueryHandler(cb_buy_wallet_only, pattern=r"^buy:wallet:[A-Za-z0-9_-]{20}$"),
+        CallbackQueryHandler(cb_wallet_panel, pattern=r"^wallet:panel$"),
     ]

@@ -146,6 +146,35 @@ async def handle_tx_hash(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(t("manual_proof_received"))
     return ConversationHandler.END
 
+async def cb_walletpay_manual(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    if not await ensure_force_join(update, ctx):
+        return ConversationHandler.END
+    amount_raw=ctx.user_data.get("wallet_topup_amount")
+    if not amount_raw:
+        await query.edit_message_text(t("order_not_found"))
+        return ConversationHandler.END
+    addresses=await _addresses()
+    available={k: v for k, v in addresses.items() if v}
+    if not available:
+        await query.edit_message_text(t("manual_no_address"))
+        return ConversationHandler.END
+    ctx.user_data.pop("wallet_topup_amount", None)
+    ctx.user_data["manual_discount_code"]=None
+    ctx.user_data["manual_plan_id"]=None
+    ctx.user_data["manual_plan_name"]=t("wallet_topup_label")
+    ctx.user_data["manual_plan_price"]=float(amount_raw)
+    ctx.user_data["manual_wallet_deduct"]=0
+    rows=[]
+    for chain in ("TRC20", "BSC", "POLYGON"):
+        if available.get(chain):
+            amount, code, decimals=await price_for_manual_chain(float(amount_raw), chain)
+            rows.append([InlineKeyboardButton(f"{chain} — {fmt(amount, decimals, code)} {code}", callback_data=f"manual:chain:{chain}")])
+    rows.append([InlineKeyboardButton(t("btn_cancel"), callback_data="cancel")])
+    await query.edit_message_text(t("manual_chain_prompt"), reply_markup=InlineKeyboardMarkup(rows), parse_mode="Markdown")
+    return USDT_MANUAL_TX
+
 async def cb_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query=update.callback_query
     await query.answer()
@@ -160,7 +189,10 @@ async def cb_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 def get_handlers():
     return [
         ConversationHandler(
-            entry_points=[CallbackQueryHandler(cb_buy_manual, pattern=r"^buy:manual:")],
+            entry_points=[
+                CallbackQueryHandler(cb_buy_manual, pattern=r"^buy:manual:"),
+                CallbackQueryHandler(cb_walletpay_manual, pattern=r"^walletpay:manual$"),
+            ],
             states={
                 USDT_MANUAL_TX: [
                     CallbackQueryHandler(cb_select_chain, pattern=r"^manual:chain:"),

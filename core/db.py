@@ -259,7 +259,13 @@ async def get_pending_orders():
 async def list_orders(status=None, offset=0, limit=20):
     def _sync():
         with _open() as db:
-            if status:
+            if status=="waiting_confirm":
+                rows = db.execute(
+                    "SELECT o.*, u.first_name, u.username, u.telegram_id, p.name as plan_name FROM orders o JOIN users u ON o.user_id=u.id LEFT JOIN plans p ON o.plan_id=p.id WHERE o.status IN ('pending','waiting_confirm') ORDER BY o.created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset)
+                ).fetchall()
+                total = db.execute("SELECT COUNT(*) FROM orders WHERE status IN ('pending','waiting_confirm')").fetchone()[0]
+            elif status:
                 rows = db.execute(
                     "SELECT o.*, u.first_name, u.username, u.telegram_id, p.name as plan_name FROM orders o JOIN users u ON o.user_id=u.id LEFT JOIN plans p ON o.plan_id=p.id WHERE o.status=? ORDER BY o.created_at DESC LIMIT ? OFFSET ?",
                     (status, limit, offset)
