@@ -387,6 +387,13 @@ _EN = {
     "adm_referral_pkg_detail": "🎁 *{name}*\n\n💾 Data: {data_text}\n📅 Duration: {days_text}\n📱 IP Limit: {ip_text}\n⭐ Credits required: {credits}\nStatus: {status}",
     "adm_referral_bulk_nodes_select_pkgs_prompt": "Select referral packages for node update:",
     "adm_referral_pkg_nodes_bulk_done": "✅ Nodes updated for {count} packages.",
+    "btn_adm_broadcast": "📢 Broadcast",
+    "adm_broadcast_prompt": "Send the message to broadcast to all users (supports Markdown):",
+    "adm_broadcast_done": "✅ Broadcast sent to {sent}/{total} users.",
+    "btn_adm_notifications": "🔔 Notifications",
+    "adm_notifications_title": "🔔 *Admin Notifications*\n\nToggle events to receive admin pings for.",
+    "adm_notif_sub_start_msg_prompt": "Enter message to send users when their subscription starts being used (send - to use default):\nCurrent: {current}",
+    "adm_notif_sub_start_msg_default": "▶️ Your subscription has started being used!",
 }
 
 _FA = {
@@ -776,6 +783,13 @@ _FA = {
     "adm_referral_pkg_detail": "🎁 *{name}*\n\n💾 حجم: {data_text}\n📅 مدت: {days_text}\n📱 محدودیت IP: {ip_text}\n⭐ اعتبار لازم: {credits}\nوضعیت: {status}",
     "adm_referral_bulk_nodes_select_pkgs_prompt": "بسته‌های دعوتی که نودهایشان باید تغییر کند را انتخاب کنید:",
     "adm_referral_pkg_nodes_bulk_done": "✅ نودها برای {count} بسته بروزرسانی شد.",
+    "btn_adm_broadcast": "📢 ارسال همگانی",
+    "adm_broadcast_prompt": "پیامی که می‌خواهید برای همه کاربران ارسال کنید را بفرستید (از Markdown پشتیبانی می‌شود):",
+    "adm_broadcast_done": "✅ پیام به {sent}/{total} کاربر ارسال شد.",
+    "btn_adm_notifications": "🔔 اعلان‌ها",
+    "adm_notifications_title": "🔔 *اعلان‌های ادمین*\n\nرویدادهایی که می‌خواهید اعلان دریافت کنید را تنظیم کنید.",
+    "adm_notif_sub_start_msg_prompt": "پیامی که هنگام شروع استفاده اشتراک برای کاربران ارسال می‌شود را وارد کنید (- برای استفاده از پیش‌فرض):\nفعلی: {current}",
+    "adm_notif_sub_start_msg_default": "▶️ اشتراک شما شروع به استفاده شد!",
 }
 
 def t(key, **kwargs):

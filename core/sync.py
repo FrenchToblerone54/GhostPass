@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from config import settings
 import core.db as db
 import core.ghostgate as gg
+from bot.notifications import admin_event
 
 logger = logging.getLogger(__name__)
 
@@ -33,5 +34,17 @@ async def _sync_tick(bot):
                         )
                     except Exception:
                         pass
+        if await db.get_setting("notify_sub_start", "0") == "1":
+            msg = await db.get_setting("sub_start_msg", "") or "▶️ Your subscription has started being used!"
+            for order in paid_orders:
+                if order.get("usage_notified", 1) == 0 and order["ghostgate_sub_id"] in live_ids:
+                    stats = await gg.get_subscription_stats(order["ghostgate_sub_id"])
+                    if stats and stats.get("used_bytes", 0) > 0:
+                        await db.update_order(order["id"], usage_notified=1)
+                        if bot:
+                            try:
+                                await bot.send_message(order["telegram_id"], msg)
+                            except Exception:
+                                pass
     except Exception as e:
         logger.error("Sync tick error: %s", e)

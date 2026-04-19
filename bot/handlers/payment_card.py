@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -9,6 +10,7 @@ from bot.strings import t
 from bot.keyboards import cancel_kb
 from bot.states import CARD_WAIT_RECEIPT
 from bot.guards import ensure_force_join
+from bot.notifications import admin_event
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +47,13 @@ async def cb_buy_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
     ctx.user_data.pop(f"discount_pct:{plan_id}", None)
     ctx.user_data.pop(f"discount_max:{plan_id}", None)
-    if discount_code_used:
-        await db.use_discount_code(discount_code_used)
     order_id = await db.create_order(uid, plan_id, "card", float(amount), code)
+    if discount_code_used:
+        await db.update_order(order_id, discount_code=discount_code_used)
     ctx.user_data["pending_order_id"] = order_id
     text = t("card_payment_info", price=price_str, card_number=card_number, card_holder=card_holder)
     await query.edit_message_text(text, reply_markup=cancel_kb(), parse_mode="Markdown")
+    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated card payment for plan *{plan['name']}* — {price_str}"))
     return CARD_WAIT_RECEIPT
 
 async def handle_receipt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

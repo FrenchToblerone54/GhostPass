@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -10,6 +11,7 @@ from bot.strings import t
 from bot.keyboards import skip_kb, cancel_kb
 from bot.states import REQUEST_REASON
 from bot.guards import ensure_force_join
+from bot.notifications import admin_event
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +42,15 @@ async def cb_buy_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
     ctx.user_data.pop(f"discount_pct:{plan_id}", None)
     ctx.user_data.pop(f"discount_max:{plan_id}", None)
-    if discount_code_used:
-        await db.use_discount_code(discount_code_used)
     amount, code, decimals = await price_for_method(effective_price, "request")
     u = update.effective_user
     uid = await db.upsert_user(u.id, u.username or "", u.first_name or "")
     order_id = await db.create_order(uid, plan_id, "request", float(amount), code)
+    if discount_code_used:
+        await db.update_order(order_id, discount_code=discount_code_used)
     ctx.user_data["request_order_id"] = order_id
     await query.edit_message_text(t("reason_prompt"), reply_markup=skip_kb("request:skip_reason"))
+    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) submitted a subscription request for plan *{plan['name']}*"))
     return REQUEST_REASON
 
 async def handle_reason(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -125,6 +128,9 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sub_id = result.get("id")
     sub_url = result.get("url", "")
     await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
+    if order.get("discount_code"):
+        await db.use_discount_code(order["discount_code"])
+    asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💰 *Request approved*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*"))
     await query.edit_message_text(f"{query.message.text}\n\n✅ Approved", reply_markup=None)
     qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
     if qr_bytes:

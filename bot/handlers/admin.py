@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import io
 import json
@@ -21,9 +22,10 @@ from bot.keyboards import (
     user_actions_kb, sub_actions_kb, node_select_kb,
     order_detail_kb, skip_kb, cancel_kb, currencies_kb,
     method_select_kb, curr_detail_kb, base_select_kb, subs_bulk_note_kb, logs_kb,
-    referral_settings_kb, referral_pkg_admin_kb
+    referral_settings_kb, referral_pkg_admin_kb, notifications_kb
 )
 from bot.strings import t
+from bot.notifications import admin_event
 from bot.states import (
     WIZARD_URL, WIZARD_SUPPORT, WIZARD_CARD_NUM, WIZARD_CARD_NAME,
     WIZARD_CRYPTO_MID, WIZARD_CRYPTO_KEY, WIZARD_CURRENCY,
@@ -52,7 +54,8 @@ from bot.states import (
     SETTINGS_START_MSG,
     REF_PKG_CREATE_NAME, REF_PKG_CREATE_CREDITS, REF_PKG_CREATE_DATA,
     REF_PKG_CREATE_DAYS, REF_PKG_CREATE_IP, REF_PKG_CREATE_NODES,
-    REF_PKG_EDIT_NODES, REF_PKG_BULK_NODES_PKGS, REF_PKG_BULK_NODES
+    REF_PKG_EDIT_NODES, REF_PKG_BULK_NODES_PKGS, REF_PKG_BULK_NODES,
+    ADMIN_BROADCAST_INPUT, SETTINGS_NOTIF_SUB_MSG
 )
 from config import settings
 
@@ -1402,6 +1405,9 @@ async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     sub_id = result.get("id")
     sub_url = result.get("url", "")
     await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
+    if order.get("discount_code"):
+        await db.use_discount_code(order["discount_code"])
+    asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💰 *Purchase confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*\n💵 Amount: {order.get('amount','')} {order.get('currency','')}"))
     await db.log_admin_action(update.effective_user.id, "confirm_order", f"order:{order_id} sub:{sub_id}")
     admin_name = update.effective_user.first_name or str(update.effective_user.id)
     try:
@@ -3180,6 +3186,56 @@ async def ref_pkgs_bulk_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYP
     await query.edit_message_text(t("adm_referral_pkg_nodes_bulk_done", count=count), reply_markup=back_kb("set:referral"))
     return ConversationHandler.END
 
+async def cb_adm_broadcast(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(t("adm_broadcast_prompt"), reply_markup=cancel_kb())
+    return ADMIN_BROADCAST_INPUT
+
+async def broadcast_message_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    telegram_ids = await db.get_all_user_telegram_ids()
+    total = len(telegram_ids)
+    sent = 0
+    for tid in telegram_ids:
+        try:
+            await ctx.bot.send_message(tid, update.message.text, parse_mode="Markdown")
+            sent += 1
+        except Exception:
+            pass
+        await asyncio.sleep(0.05)
+    await update.message.reply_text(t("adm_broadcast_done", sent=sent, total=total))
+    return ConversationHandler.END
+
+async def cb_adm_notifications(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keys = ["notify_discount", "notify_payment_link", "notify_purchase", "notify_trial", "notify_sub_start"]
+    s = {k: await db.get_setting(k, "0") for k in keys}
+    await query.edit_message_text(t("adm_notifications_title"), reply_markup=notifications_kb(s), parse_mode="Markdown")
+
+async def cb_notif_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    key = query.data.split(":", 1)[1]
+    current = await db.get_setting(key, "0")
+    await db.set_setting(key, "0" if current=="1" else "1")
+    keys = ["notify_discount", "notify_payment_link", "notify_purchase", "notify_trial", "notify_sub_start"]
+    s = {k: await db.get_setting(k, "0") for k in keys}
+    await query.edit_message_reply_markup(reply_markup=notifications_kb(s))
+
+async def cb_notif_sub_start_msg(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    current = await db.get_setting("sub_start_msg", "") or t("adm_notif_sub_start_msg_default")
+    await query.edit_message_text(t("adm_notif_sub_start_msg_prompt", current=current), reply_markup=cancel_kb())
+    return SETTINGS_NOTIF_SUB_MSG
+
+async def notif_sub_start_msg_input(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    await db.set_setting("sub_start_msg", t("adm_notif_sub_start_msg_default") if text=="-" else text)
+    await update.message.reply_text(t("setting_saved"))
+    return ConversationHandler.END
+
 def get_main_conv_handler():
     states = {
         WIZARD_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_url)],
@@ -3341,6 +3397,8 @@ def get_main_conv_handler():
             CallbackQueryHandler(offer_plans_none, pattern=r"^offer:plans_none$"),
             CallbackQueryHandler(offer_plans_done, pattern=r"^offer:plans_done$"),
         ],
+        ADMIN_BROADCAST_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, broadcast_message_input)],
+        SETTINGS_NOTIF_SUB_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, notif_sub_start_msg_input)],
     }
     entry_points = [
         CommandHandler("start", cmd_start_admin),
@@ -3401,6 +3459,8 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_ref_pkg_create, pattern=r"^ref_pkg:create$"),
         CallbackQueryHandler(cb_ref_pkg_edit_nodes, pattern=r"^ref_pkg:edit_nodes:"),
         CallbackQueryHandler(cb_ref_pkgs_bulk_nodes, pattern=r"^ref_pkgs:bulk_nodes$"),
+        CallbackQueryHandler(cb_adm_broadcast, pattern=r"^adm:broadcast$"),
+        CallbackQueryHandler(cb_notif_sub_start_msg, pattern=r"^notif:sub_start_msg$"),
     ]
     return ConversationHandler(entry_points=entry_points, states=states, fallbacks=[CallbackQueryHandler(cb_cancel_conv, pattern=r"^cancel$")], per_message=False, name="admin_main")
 
@@ -3469,4 +3529,6 @@ def get_handlers():
         CallbackQueryHandler(cb_ref_pkg_detail, pattern=r"^ref_pkg:detail:"),
         CallbackQueryHandler(cb_ref_pkg_toggle, pattern=r"^ref_pkg:toggle:"),
         CallbackQueryHandler(cb_ref_pkg_delete, pattern=r"^ref_pkg:delete:"),
+        CallbackQueryHandler(cb_adm_notifications, pattern=r"^adm:notifications$"),
+        CallbackQueryHandler(cb_notif_toggle, pattern=r"^notif_toggle:"),
     ]

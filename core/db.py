@@ -54,6 +54,12 @@ def _migrate_v5(db):
     db.execute("PRAGMA user_version=5")
     db.commit()
 
+def _migrate_v6(db):
+    db.execute("ALTER TABLE orders ADD COLUMN discount_code TEXT")
+    db.execute("ALTER TABLE orders ADD COLUMN usage_notified INTEGER DEFAULT 0")
+    db.execute("PRAGMA user_version=6")
+    db.commit()
+
 async def init_db():
     def _sync():
         with _open() as db:
@@ -70,6 +76,8 @@ async def init_db():
                 _migrate_v4(db)
             if version<5:
                 _migrate_v5(db)
+            if version<6:
+                _migrate_v6(db)
     await asyncio.to_thread(_sync)
 
 async def upsert_user(telegram_id, username, first_name):
@@ -204,7 +212,7 @@ async def get_order(order_id):
     return await asyncio.to_thread(_sync)
 
 async def update_order(order_id, **kwargs):
-    allowed = {"ghostgate_sub_id", "payment_method", "status", "cryptomus_invoice_id", "receipt_file_id", "paid_at"}
+    allowed = {"ghostgate_sub_id", "payment_method", "status", "cryptomus_invoice_id", "receipt_file_id", "paid_at", "discount_code", "usage_notified"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return
@@ -605,6 +613,13 @@ async def redeem_referral_package(user_id, package_id, credits_used, ghostgate_s
             db.execute("INSERT INTO referral_redemptions (id, user_id, package_id, credits_used, ghostgate_sub_id) VALUES (?,?,?,?,?)", (rid, user_id, package_id, credits_used, ghostgate_sub_id))
             db.commit()
             return rid
+    return await asyncio.to_thread(_sync)
+
+async def get_all_user_telegram_ids():
+    def _sync():
+        with _open() as db:
+            rows = db.execute("SELECT telegram_id FROM users WHERE is_banned=0").fetchall()
+            return [r[0] for r in rows]
     return await asyncio.to_thread(_sync)
 
 async def get_user_by_telegram_safe(telegram_id):

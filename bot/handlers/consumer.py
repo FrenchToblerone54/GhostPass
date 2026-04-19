@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import logging
@@ -10,6 +11,7 @@ from decimal import Decimal
 from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb, subs_list_kb, sub_detail_kb, referral_panel_kb, referral_packages_kb, referral_pkg_detail_kb, referral_redeem_confirm_kb
 from bot.strings import t
 from bot.guards import ensure_force_join, check_force_join
+from bot.notifications import admin_event
 from bot.states import CONSUMER_DISCOUNT_INPUT
 from config import settings
 
@@ -412,6 +414,7 @@ async def cb_trial_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("service_unavailable"))
         return
     await db.create_trial_claim(uid, result["id"])
+    asyncio.create_task(admin_event(ctx.bot, "notify_trial", f"🎁 User *{query.from_user.first_name}* (`{query.from_user.id}`) claimed a trial."))
     claim_start_text = t("trial_start_from_connection") if trial_start_after_use=="1" else t("trial_start_from_get")
     await ctx.bot.send_message(
         chat_id=query.from_user.id,
@@ -620,6 +623,7 @@ async def discount_code_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data[f"discount_code:{plan_id}"] = code["code"]
     ctx.user_data[f"discount_max:{plan_id}"] = code.get("max_discount_amount") or 0
     plan = await db.get_plan(plan_id)
+    asyncio.create_task(admin_event(update.get_bot(), "notify_discount", f"🏷️ User *{update.effective_user.first_name}* used discount code `{code['code']}` on plan *{plan['name'] if plan else plan_id}*."))
     if plan:
         max_amount = code.get("max_discount_amount") or 0
         discount = Decimal(str(plan["price"])) * Decimal(str(code["discount_percent"])) / 100

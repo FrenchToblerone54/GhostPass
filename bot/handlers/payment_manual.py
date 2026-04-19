@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from decimal import Decimal
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -8,6 +9,7 @@ from bot.strings import t
 from bot.keyboards import confirm_reject_kb, cancel_kb
 from bot.states import USDT_MANUAL_TX
 from bot.guards import ensure_force_join
+from bot.notifications import admin_event
 from config import settings
 
 logger=logging.getLogger(__name__)
@@ -51,8 +53,7 @@ async def cb_buy_manual(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     discount_code_used = ctx.user_data.pop(f"discount_code:{plan_id}", None)
     ctx.user_data.pop(f"discount_pct:{plan_id}", None)
     ctx.user_data.pop(f"discount_max:{plan_id}", None)
-    if discount_code_used:
-        await db.use_discount_code(discount_code_used)
+    ctx.user_data["manual_discount_code"]=discount_code_used
     ctx.user_data["manual_plan_id"]=plan_id
     ctx.user_data["manual_plan_name"]=plan["name"]
     ctx.user_data["manual_plan_price"]=effective_price
@@ -82,6 +83,9 @@ async def cb_select_chain(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     u=update.effective_user
     uid=await db.upsert_user(u.id, u.username or "", u.first_name or "")
     order_id=await db.create_order(uid, plan_id, "manual", float(amount), code)
+    discount_code_used=ctx.user_data.pop("manual_discount_code", None)
+    if discount_code_used:
+        await db.update_order(order_id, discount_code=discount_code_used)
     amount_str=f"{fmt(amount, decimals, code)} {code}"
     ctx.user_data["manual_order_id"]=order_id
     ctx.user_data["manual_amount_str"]=amount_str
@@ -92,6 +96,9 @@ async def cb_select_chain(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         reply_markup=cancel_kb(),
         parse_mode="Markdown"
     )
+    u=update.effective_user
+    plan_name=ctx.user_data.get("manual_plan_name","")
+    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated manual USDT payment for plan *{plan_name}* — {amount_str} via {chain}"))
     return USDT_MANUAL_TX
 
 async def handle_tx_hash(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

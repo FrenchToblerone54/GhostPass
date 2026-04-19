@@ -20,6 +20,8 @@ def main_admin_kb():
         [InlineKeyboardButton(t("btn_adm_users"), callback_data="adm:users"), InlineKeyboardButton(t("btn_adm_admins"), callback_data="adm:admins")],
         [InlineKeyboardButton(t("btn_adm_orders"), callback_data="adm:orders"), InlineKeyboardButton(t("btn_adm_settings"), callback_data="adm:settings")],
         [InlineKeyboardButton(t("btn_adm_discounts"), callback_data="adm:discounts"), InlineKeyboardButton(t("btn_adm_offers"), callback_data="adm:offers")],
+        [InlineKeyboardButton(t("btn_adm_broadcast"), callback_data="adm:broadcast")],
+        [InlineKeyboardButton(t("btn_adm_notifications"), callback_data="adm:notifications")],
         [InlineKeyboardButton(t("btn_adm_logs"), callback_data="adm:logs"), InlineKeyboardButton(t("btn_adm_update"), callback_data="adm:update")],
     ])
 
@@ -227,6 +229,19 @@ def referral_pkg_admin_kb(pkg_id, is_active):
         [InlineKeyboardButton(t("btn_delete"), callback_data=f"ref_pkg:delete:{pkg_id}")],
         [InlineKeyboardButton(t("btn_back"), callback_data="set:referral")],
     ])
+
+def notifications_kb(s):
+    events = [
+        ("notify_discount", "🏷️ Discount Code"),
+        ("notify_payment_link", "🔗 Payment Link"),
+        ("notify_purchase", "💰 Purchase"),
+        ("notify_trial", "🎁 Trial"),
+        ("notify_sub_start", "▶️ Sub First Used"),
+    ]
+    rows = [[InlineKeyboardButton(f"{'✅' if s.get(k)=='1' else '❌'} {label}", callback_data=f"notif_toggle:{k}")] for k, label in events]
+    rows.append([InlineKeyboardButton("✏️ Sub-start message", callback_data="notif:sub_start_msg")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:back")])
+    return InlineKeyboardMarkup(rows)
 
 def subs_bulk_note_kb(page_subs, selected_ids, page, total, per_page):
     rows = []
