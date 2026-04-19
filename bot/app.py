@@ -12,21 +12,22 @@ import bot.handlers.payment_card as card_h
 import bot.handlers.payment_crypto as crypto_h
 import bot.handlers.payment_request as request_h
 import bot.handlers.payment_manual as manual_h
+from core.tasks import create_logged_task
 
 logger = logging.getLogger(__name__)
 
 async def _post_init(app: Application):
     await init_db()
     await register_commands(app.bot)
-    asyncio.create_task(run_sync_worker(app.bot))
-    asyncio.create_task(crypto_h.run_webhook_server(app.bot))
+    create_logged_task(run_sync_worker(app.bot), logger, "sync-worker")
+    create_logged_task(crypto_h.run_webhook_server(app.bot), logger, "crypto-webhook-server")
     if settings.AUTO_UPDATE:
         http_proxy=settings.AUTO_UPDATE_HTTP_PROXY or ""
         https_proxy=settings.AUTO_UPDATE_HTTPS_PROXY or ""
         updater=Updater(check_interval=settings.UPDATE_CHECK_INTERVAL, check_on_startup=settings.CHECK_ON_STARTUP, http_proxy=http_proxy, https_proxy=https_proxy)
         shutdown_event=asyncio.Event()
         app.bot_data["shutdown_event"]=shutdown_event
-        asyncio.create_task(updater.update_loop(shutdown_event))
+        create_logged_task(updater.update_loop(shutdown_event), logger, "auto-update-loop")
     logger.info("GhostPass started")
 
 async def _post_stop(app: Application):

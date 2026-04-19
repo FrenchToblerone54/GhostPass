@@ -5,6 +5,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, ConversationHandler, filters
 import core.db as db
 from core.currency import fmt, price_for_manual_chain
+from core.tasks import create_logged_task
 from bot.strings import t
 from bot.keyboards import confirm_reject_kb, cancel_kb
 from bot.states import USDT_MANUAL_TX
@@ -110,7 +111,7 @@ async def cb_select_chain(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     u=update.effective_user
     plan_name=ctx.user_data.get("manual_plan_name","")
-    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated manual USDT payment for plan *{plan_name}* — {amount_str} via {chain}"))
+    create_logged_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated manual USDT payment for plan *{plan_name}* — {amount_str} via {chain}"), logger, f"manual-payment-link-notify:{order_id}")
     return USDT_MANUAL_TX
 
 async def handle_tx_hash(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

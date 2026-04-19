@@ -1,6 +1,9 @@
+import os
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
 from typing import Optional
+
+DEFAULT_ENV_FILE=os.getenv("GHOSTPASS_ENV_FILE", "/opt/ghostpass/.env")
 
 class Settings(BaseSettings):
     BOT_TOKEN: str
@@ -26,6 +29,7 @@ class Settings(BaseSettings):
     AUTO_UPDATE_HTTPS_PROXY: Optional[str] = None
     DB_PATH: str = "/opt/ghostpass/ghostpass.db"
     LOG_FILE: str = "/var/log/ghostpass.log"
+    ENV_FILE: str = DEFAULT_ENV_FILE
 
     @field_validator("GHOSTGATE_URL")
     @classmethod
@@ -33,7 +37,7 @@ class Settings(BaseSettings):
         return v.rstrip("/")
 
     class Config:
-        env_file = "/opt/ghostpass/.env"
+        env_file = DEFAULT_ENV_FILE
         env_file_encoding = "utf-8"
         extra = "ignore"
 

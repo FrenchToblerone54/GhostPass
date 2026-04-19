@@ -1,5 +1,6 @@
 import json
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.error import TelegramError
 import core.db as db
 from bot.strings import t
 
@@ -18,7 +19,7 @@ async def _get_force_join_channels():
     if raw:
         try:
             return json.loads(raw)
-        except Exception:
+        except json.JSONDecodeError:
             pass
     single=(await db.get_setting("force_join_channel", "") or "").strip()
     return [single] if single else []
@@ -35,7 +36,7 @@ async def check_force_join(bot, uid):
             m=await bot.get_chat_member(channel, uid)
             if m.status in ("member", "administrator", "creator"):
                 continue
-        except Exception:
+        except TelegramError:
             pass
         return False
     return True
@@ -56,7 +57,7 @@ async def ensure_force_join(update, ctx):
             m=await ctx.bot.get_chat_member(channel, uid)
             if m.status in ("member", "administrator", "creator"):
                 continue
-        except Exception:
+        except TelegramError:
             pass
         not_joined.append(channel)
     if not not_joined:

@@ -63,11 +63,11 @@ def _migrate_v6(db):
 def _migrate_v7(db):
     try:
         db.execute("ALTER TABLE users ADD COLUMN wallet_balance REAL DEFAULT 0.0")
-    except Exception:
+    except sqlite3.OperationalError:
         pass
     try:
         db.execute("ALTER TABLE orders ADD COLUMN wallet_credit_used REAL DEFAULT 0.0")
-    except Exception:
+    except sqlite3.OperationalError:
         pass
     db.execute("PRAGMA user_version=7")
     db.commit()
@@ -550,12 +550,11 @@ async def get_wallet_balance(user_id):
 async def adjust_wallet(user_id, delta):
     def _sync():
         with _open() as db:
+            db.execute("BEGIN IMMEDIATE")
+            db.execute("UPDATE users SET wallet_balance=MAX(0.0, COALESCE(wallet_balance, 0.0)+?) WHERE id=?", (delta, user_id))
             row=db.execute("SELECT wallet_balance FROM users WHERE id=?", (user_id,)).fetchone()
-            current=float(row[0]) if row and row[0] is not None else 0.0
-            new_bal=max(0.0, current+delta)
-            db.execute("UPDATE users SET wallet_balance=? WHERE id=?", (new_bal, user_id))
             db.commit()
-            return new_bal
+            return float(row[0]) if row and row[0] is not None else 0.0
     return await asyncio.to_thread(_sync)
 
 async def get_referrer_for_user(user_id):
@@ -679,7 +678,7 @@ async def get_all_user_telegram_ids():
 async def get_user_by_telegram_safe(telegram_id):
     try:
         tid=int(telegram_id)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     return await get_user_by_telegram(tid)
 

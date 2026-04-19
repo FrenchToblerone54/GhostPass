@@ -1,4 +1,5 @@
 import asyncio
+import io
 import hashlib
 import base64
 import json
@@ -6,11 +7,13 @@ import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from aiohttp import web
+import httpx
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from telegram.ext import ContextTypes, CallbackQueryHandler
 import core.db as db
 import core.ghostgate as gg
 from core.currency import price_for_method, fmt, get_enabled_gp_pairs, price_for_gp_pair
+from core.tasks import create_logged_task
 from bot.strings import t
 from bot.guards import ensure_force_join
 from bot.notifications import admin_event
@@ -24,7 +27,6 @@ def _sign(body_bytes, api_key):
     return hashlib.md5((base64.b64encode(body_bytes).decode()+api_key).encode()).hexdigest()
 
 async def create_invoice(order_id, amount, currency, merchant_id, api_key):
-    import httpx
     payload = {"order_id": order_id, "amount": str(amount), "currency": currency}
     body = json.dumps(payload, separators=(",", ":")).encode()
     sign = _sign(body, api_key)
@@ -35,7 +37,6 @@ async def create_invoice(order_id, amount, currency, merchant_id, api_key):
         return r.json()
 
 async def create_invoice_btcpay(order_id, amount, currency, base_url, store_id, api_key):
-    import httpx
     payload={"amount": float(amount), "currency": currency, "metadata": {"orderId": order_id}}
     headers={"Authorization": f"token {api_key}", "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=20) as c:
@@ -44,7 +45,6 @@ async def create_invoice_btcpay(order_id, amount, currency, base_url, store_id, 
         return r.json()
 
 async def check_invoice(invoice_id, merchant_id, api_key):
-    import httpx
     payload = {"uuid": invoice_id}
     body = json.dumps(payload, separators=(",", ":")).encode()
     sign = _sign(body, api_key)
@@ -55,7 +55,6 @@ async def check_invoice(invoice_id, merchant_id, api_key):
         return r.json()
 
 async def check_invoice_btcpay(invoice_id, base_url, store_id, api_key):
-    import httpx
     headers={"Authorization": f"token {api_key}"}
     async with httpx.AsyncClient(timeout=20) as c:
         r=await c.get(f"{base_url.rstrip('/')}/api/v1/stores/{store_id}/invoices/{invoice_id}", headers=headers)
@@ -63,7 +62,6 @@ async def check_invoice_btcpay(invoice_id, base_url, store_id, api_key):
         return r.json()
 
 async def create_invoice_ghostpayments(base_url, api_key, chain, token, amount_native, order_id):
-    import httpx
     payload={"chain": chain, "token": token, "amount_native": str(amount_native), "metadata": {"order_id": order_id}}
     headers={"X-GhostPay-Key": api_key, "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=20) as c:
@@ -72,7 +70,6 @@ async def create_invoice_ghostpayments(base_url, api_key, chain, token, amount_n
         return r.json()
 
 async def check_invoice_ghostpayments(base_url, invoice_id):
-    import httpx
     async with httpx.AsyncClient(timeout=20) as c:
         r=await c.get(f"{base_url.rstrip('/')}/api/invoice/{invoice_id}")
         r.raise_for_status()
@@ -177,9 +174,9 @@ async def cb_buy_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_open_payment"), url=pay_url)]])
     await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
-    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated crypto payment for plan *{plan['name']}* — {price_str}"))
+    create_logged_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated crypto payment for plan *{plan['name']}* — {price_str}"), logger, "crypto-payment-link-notify")
     provider="ghostpayments" if use_ghostpayments else ("btcpay" if use_btcpay else "cryptomus")
-    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key, gp_url))
+    create_logged_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key, gp_url), logger, f"crypto-invoice-poll:{order_id}")
 
 async def cb_buy_gp_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -216,7 +213,7 @@ async def cb_buy_gp_pick(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_open_payment"), url=pay_url)]])
     await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
-    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, "", "", ctx.bot, "ghostpayments", "", "", "", gp_url))
+    create_logged_task(_poll_invoice(invoice_id, order_id, u.id, "", "", ctx.bot, "ghostpayments", "", "", "", gp_url), logger, f"gp-invoice-poll:{order_id}")
 
 async def _poll_invoice(invoice_id, order_id, telegram_id, merchant_id, api_key, bot, provider="cryptomus", btcpay_url="", btcpay_store="", btcpay_key="", gp_url=""):
     for _ in range(120):
@@ -257,7 +254,7 @@ async def _activate_order(order_id, telegram_id, bot):
         await db.adjust_wallet(order["user_id"], order["amount"])
         await db.update_order(order_id, status="paid", paid_at=now)
         new_balance = await db.get_wallet_balance(order["user_id"])
-        asyncio.create_task(admin_event(bot, "notify_purchase", f"💳 *Wallet top-up confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n💰 Amount: {order['amount']} {order['currency']}"))
+        create_logged_task(admin_event(bot, "notify_purchase", f"💳 *Wallet top-up confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n💰 Amount: {order['amount']} {order['currency']}"), logger, f"crypto-wallet-topup-notify:{order_id}")
         try:
             await bot.send_message(telegram_id, t("wallet_topup_confirmed", amount=order["amount"], balance=new_balance))
         except Exception as e:
@@ -290,8 +287,8 @@ async def _activate_order(order_id, telegram_id, bot):
     if order.get("wallet_credit_used", 0)>0:
         await db.adjust_wallet(order["user_id"], -order["wallet_credit_used"])
     from bot.handlers.admin import _credit_referral_commission
-    asyncio.create_task(_credit_referral_commission(order["user_id"], plan["price"], bot))
-    asyncio.create_task(admin_event(bot, "notify_purchase", f"💰 *Crypto purchase confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*\n💵 Amount: {order.get('amount','')} {order.get('currency','')}"))
+    create_logged_task(_credit_referral_commission(order["user_id"], plan["price"], bot), logger, f"crypto-referral-credit:{order_id}")
+    create_logged_task(admin_event(bot, "notify_purchase", f"💰 *Crypto purchase confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*\n💵 Amount: {order.get('amount','')} {order.get('currency','')}"), logger, f"crypto-purchase-notify:{order_id}")
     u_name = f"@{user['username']}" if user.get("username") else str(user["telegram_id"])
     admin_caption = t("crypto_paid_admin", first_name=user.get("first_name",""), username=u_name, telegram_id=user["telegram_id"], plan_name=plan["name"], amount=order.get("amount",""), currency=order.get("currency",""))
     for admin_id in await db.get_all_admin_ids(settings.ADMIN_ID):
@@ -301,7 +298,6 @@ async def _activate_order(order_id, telegram_id, bot):
             logger.error("Failed to notify admin %s: %s", admin_id, e)
     qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
     if qr_bytes:
-        import io
         await bot.send_photo(telegram_id, photo=io.BytesIO(qr_bytes), caption=t("crypto_paid", url=sub_url), parse_mode="Markdown")
     else:
         await bot.send_message(telegram_id, t("crypto_paid", url=sub_url), parse_mode="Markdown")
@@ -385,9 +381,9 @@ async def cb_walletpay_crypto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_open_payment"), url=pay_url)]])
     await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
-    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated crypto payment for wallet top-up — {price_str}"))
+    create_logged_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated crypto payment for wallet top-up — {price_str}"), logger, "crypto-wallet-payment-link-notify")
     provider="ghostpayments" if use_ghostpayments else ("btcpay" if use_btcpay else "cryptomus")
-    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key, gp_url))
+    create_logged_task(_poll_invoice(invoice_id, order_id, u.id, merchant_id, api_key, ctx.bot, provider, btcpay_url, btcpay_store, btcpay_key, gp_url), logger, f"crypto-wallet-invoice-poll:{order_id}")
 
 async def cb_walletpay_gp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query=update.callback_query
@@ -425,8 +421,8 @@ async def cb_walletpay_gp(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await db.update_order(order_id, cryptomus_invoice_id=invoice_id)
     kb=InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_open_payment"), url=pay_url)]])
     await query.edit_message_text(t("crypto_invoice_created", amount=price_str), reply_markup=kb)
-    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated crypto payment for wallet top-up — {price_str}"))
-    asyncio.create_task(_poll_invoice(invoice_id, order_id, u.id, "", "", ctx.bot, "ghostpayments", "", "", "", gp_url))
+    create_logged_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated crypto payment for wallet top-up — {price_str}"), logger, "gp-wallet-payment-link-notify")
+    create_logged_task(_poll_invoice(invoice_id, order_id, u.id, "", "", ctx.bot, "ghostpayments", "", "", "", gp_url), logger, f"gp-wallet-invoice-poll:{order_id}")
 
 async def _webhook_handler(request):
     try:

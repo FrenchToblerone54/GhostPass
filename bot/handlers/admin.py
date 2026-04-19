@@ -3,8 +3,10 @@ import logging
 import io
 import json
 import re
+import httpx
 from datetime import datetime, timezone
 from decimal import Decimal
+from dotenv import set_key as dotenv_set
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ContextTypes, CommandHandler, CallbackQueryHandler,
@@ -26,6 +28,7 @@ from bot.keyboards import (
 )
 from bot.strings import t
 from bot.notifications import admin_event
+from core.tasks import create_logged_task
 from bot.states import (
     WIZARD_URL, WIZARD_SUPPORT, WIZARD_CARD_NUM, WIZARD_CARD_NAME,
     WIZARD_CRYPTO_MID, WIZARD_CRYPTO_KEY, WIZARD_CURRENCY,
@@ -130,7 +133,6 @@ async def cmd_start_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def wizard_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip().rstrip("/")
-    import httpx
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(f"{url}/api/status")
@@ -211,8 +213,7 @@ async def _wizard_save(ctx, base_currency):
     card_name = ctx.user_data.get("wizard_card_name", "")
     crypto_mid = ctx.user_data.get("wizard_crypto_mid", "")
     crypto_key = ctx.user_data.get("wizard_crypto_key", "")
-    from dotenv import set_key as dotenv_set
-    dotenv_set("/opt/ghostpass/.env", "GHOSTGATE_URL", url)
+    dotenv_set(settings.ENV_FILE, "GHOSTGATE_URL", url)
     settings.GHOSTGATE_URL = url
     await db.set_setting("support_username", support)
     await set_base_currency(base_currency)
@@ -1504,7 +1505,10 @@ async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await db.update_order(order_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
         user = await db.get_user_by_id(order["user_id"])
         new_balance = await db.get_wallet_balance(order["user_id"])
-        asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💳 *Wallet top-up confirmed*\n\n👤 {user.get('first_name','') if user else ''} (`{user['telegram_id'] if user else '?'}`)\n💰 Amount: {order['amount']} {order['currency']}"))
+        if not user:
+            await query.edit_message_text(t("adm_user_not_found"))
+            return
+        create_logged_task(admin_event(ctx.bot, "notify_purchase", f"💳 *Wallet top-up confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n💰 Amount: {order['amount']} {order['currency']}"), logger, f"admin-wallet-topup-notify:{order_id}")
         try:
             await ctx.bot.send_message(user["telegram_id"], t("wallet_topup_confirmed", amount=order["amount"], balance=new_balance))
         except Exception:
@@ -1541,8 +1545,8 @@ async def cb_confirm_order(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await db.use_discount_code(order["discount_code"])
     if order.get("wallet_credit_used", 0)>0:
         await db.adjust_wallet(order["user_id"], -order["wallet_credit_used"])
-    asyncio.create_task(_credit_referral_commission(order["user_id"], plan["price"], ctx.bot))
-    asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💰 *Purchase confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*\n💵 Amount: {order.get('amount','')} {order.get('currency','')}"))
+    create_logged_task(_credit_referral_commission(order["user_id"], plan["price"], ctx.bot), logger, f"admin-referral-credit:{order_id}")
+    create_logged_task(admin_event(ctx.bot, "notify_purchase", f"💰 *Purchase confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*\n💵 Amount: {order.get('amount','')} {order.get('currency','')}"), logger, f"admin-purchase-notify:{order_id}")
     await db.log_admin_action(update.effective_user.id, "confirm_order", f"order:{order_id} sub:{sub_id}")
     admin_name = update.effective_user.first_name or str(update.effective_user.id)
     try:
@@ -1670,7 +1674,6 @@ async def cb_set_gg_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def settings_gg_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip().rstrip("/")
-    import httpx
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(f"{url}/api/status")
@@ -1678,8 +1681,7 @@ async def settings_gg_url(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(t("wizard_step1_fail", error=str(e)))
         return SETTINGS_GG_URL
-    from dotenv import set_key as dotenv_set
-    dotenv_set("/opt/ghostpass/.env", "GHOSTGATE_URL", url)
+    dotenv_set(settings.ENV_FILE, "GHOSTGATE_URL", url)
     settings.GHOSTGATE_URL = url
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
@@ -1947,8 +1949,7 @@ async def settings_sync(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text(t("invalid_input"))
         return SETTINGS_SYNC
-    from dotenv import set_key as dotenv_set
-    dotenv_set("/opt/ghostpass/.env", "SYNC_INTERVAL", str(val))
+    dotenv_set(settings.ENV_FILE, "SYNC_INTERVAL", str(val))
     settings.SYNC_INTERVAL = val
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
@@ -2101,8 +2102,7 @@ async def settings_update_http_proxy(update: Update, ctx: ContextTypes.DEFAULT_T
     val = update.message.text.strip()
     if val=="-":
         val=""
-    from dotenv import set_key as dotenv_set
-    dotenv_set("/opt/ghostpass/.env", "AUTO_UPDATE_HTTP_PROXY", val)
+    dotenv_set(settings.ENV_FILE, "AUTO_UPDATE_HTTP_PROXY", val)
     settings.AUTO_UPDATE_HTTP_PROXY = val or None
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END
@@ -2120,8 +2120,7 @@ async def settings_update_https_proxy(update: Update, ctx: ContextTypes.DEFAULT_
     val = update.message.text.strip()
     if val=="-":
         val=""
-    from dotenv import set_key as dotenv_set
-    dotenv_set("/opt/ghostpass/.env", "AUTO_UPDATE_HTTPS_PROXY", val)
+    dotenv_set(settings.ENV_FILE, "AUTO_UPDATE_HTTPS_PROXY", val)
     settings.AUTO_UPDATE_HTTPS_PROXY = val or None
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("adm:settings"))
     return ConversationHandler.END

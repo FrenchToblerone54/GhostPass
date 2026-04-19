@@ -8,8 +8,10 @@ logger=logging.getLogger(__name__)
 async def _safe_wait(coro, timeout, name):
     try:
         await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning("%s timed out", name)
     except Exception as e:
-        logger.warning("%s failed/timed out: %s", name, e)
+        logger.warning("%s failed: %s", name, e)
 
 async def _run_once():
     from bot.app import build_app

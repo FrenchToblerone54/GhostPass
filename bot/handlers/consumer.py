@@ -2,12 +2,14 @@ import asyncio
 import io
 import json
 import logging
+from datetime import datetime, timezone
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, filters
 import core.db as db
 import core.ghostgate as gg
 from core.currency import get_base_currency, fmt_price_for_method, price_for_method, fmt
 from decimal import Decimal
+from core.tasks import create_logged_task
 from bot.keyboards import main_consumer_kb, plans_kb, plan_buy_kb, back_kb, subs_list_kb, sub_detail_kb, referral_panel_kb, referral_packages_kb, referral_pkg_detail_kb, referral_redeem_confirm_kb, wallet_panel_kb, wallet_topup_pay_kb
 from bot.strings import t
 from bot.guards import ensure_force_join, check_force_join
@@ -87,8 +89,9 @@ async def _show_plans(update, ctx):
     page=max(0, min(page, max_page))
     ctx.user_data["consumer_plans_page"]=page
     if not plans:
-        target = update.message or update.callback_query.message
-        await target.reply_text(t("no_plans"))
+        target=update.effective_message or (update.callback_query.message if update.callback_query else None)
+        if target:
+            await target.reply_text(t("no_plans"))
         return
     start=page*per_page
     show=plans[start:start+per_page]
@@ -395,13 +398,12 @@ async def cb_buy_wallet_only(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     sub_id = result.get("id")
     sub_url = result.get("url", "")
-    from datetime import datetime, timezone
     await db.update_order(order_id, ghostgate_sub_id=sub_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
     if discount_code_used:
         await db.use_discount_code(discount_code_used)
     await db.adjust_wallet(uid, -effective_price)
     from bot.handlers.admin import _credit_referral_commission
-    asyncio.create_task(_credit_referral_commission(uid, plan["price"], ctx.bot))
+    create_logged_task(_credit_referral_commission(uid, plan["price"], ctx.bot), logger, f"wallet-referral-credit:{order_id}")
     qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
     if qr_bytes:
         await query.message.reply_photo(photo=io.BytesIO(qr_bytes), caption=t("wallet_order_created", url=sub_url), parse_mode="Markdown")
@@ -501,7 +503,7 @@ async def cb_trial_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(t("service_unavailable"))
         return
     await db.create_trial_claim(uid, result["id"])
-    asyncio.create_task(admin_event(ctx.bot, "notify_trial", f"🎁 User *{query.from_user.first_name}* (`{query.from_user.id}`) claimed a trial."))
+    create_logged_task(admin_event(ctx.bot, "notify_trial", f"🎁 User *{query.from_user.first_name}* (`{query.from_user.id}`) claimed a trial."), logger, f"trial-notify:{query.from_user.id}")
     claim_start_text = t("trial_start_from_connection") if trial_start_after_use=="1" else t("trial_start_from_get")
     await ctx.bot.send_message(
         chat_id=query.from_user.id,
@@ -765,14 +767,13 @@ async def discount_code_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data[f"discount_code:{plan_id}"] = code["code"]
     ctx.user_data[f"discount_max:{plan_id}"] = code.get("max_discount_amount") or 0
     plan = await db.get_plan(plan_id)
-    asyncio.create_task(admin_event(update.get_bot(), "notify_discount", f"🏷️ User *{update.effective_user.first_name}* used discount code `{code['code']}` on plan *{plan['name'] if plan else plan_id}*."))
+    create_logged_task(admin_event(update.get_bot(), "notify_discount", f"🏷️ User *{update.effective_user.first_name}* used discount code `{code['code']}` on plan *{plan['name'] if plan else plan_id}*."), logger, f"discount-notify:{plan_id}")
     if plan:
         max_amount = code.get("max_discount_amount") or 0
         discount = Decimal(str(plan["price"])) * Decimal(str(code["discount_percent"])) / 100
         if max_amount > 0:
             discount = min(discount, Decimal(str(max_amount)))
         effective = float(Decimal(str(plan["price"])) - discount)
-        from core.currency import get_base_currency, fmt
         base = await get_base_currency()
         price_str = f"{fmt(Decimal(str(effective)), 0, base)} {base}"
         await update.message.reply_text(t("discount_applied", pct=code["discount_percent"], price=price_str))

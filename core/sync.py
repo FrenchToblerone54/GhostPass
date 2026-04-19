@@ -25,6 +25,7 @@ async def _sync_tick(bot):
         paid_orders = await db.get_paid_orders_with_sub()
         for order in paid_orders:
             if order["ghostgate_sub_id"] not in live_ids:
+                logger.warning("Subscription %s missing for order %s", order["ghostgate_sub_id"], order["id"])
                 await db.update_order(order["id"], status="cancelled")
                 if bot:
                     try:
@@ -32,8 +33,8 @@ async def _sync_tick(bot):
                             order["telegram_id"],
                             "\u26a0\ufe0f Your subscription has been removed from the server. Please contact support."
                         )
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.error("Failed to notify user %s about removed subscription: %s", order["telegram_id"], e)
         if await db.get_setting("notify_sub_start", "0") == "1":
             msg = await db.get_setting("sub_start_msg", "") or "▶️ Your subscription has started being used!"
             for order in paid_orders:
@@ -44,7 +45,7 @@ async def _sync_tick(bot):
                         if bot:
                             try:
                                 await bot.send_message(order["telegram_id"], msg)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.error("Failed to notify user %s about subscription start: %s", order["telegram_id"], e)
     except Exception as e:
         logger.error("Sync tick error: %s", e)

@@ -1,4 +1,5 @@
 import asyncio
+import io
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -7,11 +8,13 @@ from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, Con
 import core.db as db
 import core.ghostgate as gg
 from core.currency import price_for_method, fmt
+from core.tasks import create_logged_task
 from bot.strings import t
 from bot.keyboards import skip_kb, cancel_kb
 from bot.states import REQUEST_REASON
 from bot.guards import ensure_force_join
 from bot.notifications import admin_event
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,7 @@ async def cb_buy_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await db.update_order(order_id, wallet_credit_used=wallet_deduct)
     ctx.user_data["request_order_id"] = order_id
     await query.edit_message_text(t("reason_prompt"), reply_markup=skip_kb("request:skip_reason"))
-    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) submitted a subscription request for plan *{plan['name']}*"))
+    create_logged_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) submitted a subscription request for plan *{plan['name']}*"), logger, f"request-payment-link-notify:{order_id}")
     return REQUEST_REASON
 
 async def handle_reason(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -97,7 +100,6 @@ async def _notify_admins(order_id, reason, update, ctx):
         InlineKeyboardButton("✅ Approve", callback_data=f"req:approve:{order_id}"),
         InlineKeyboardButton("❌ Decline", callback_data=f"req:decline:{order_id}"),
     ]])
-    from config import settings
     admin_ids = await db.get_all_admin_ids(settings.ADMIN_ID)
     for admin_id in admin_ids:
         try:
@@ -120,7 +122,7 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await db.adjust_wallet(order["user_id"], order["amount"])
         await db.update_order(order_id, status="paid", paid_at=datetime.now(timezone.utc).isoformat())
         new_balance = await db.get_wallet_balance(order["user_id"])
-        asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💳 *Wallet top-up confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n💰 Amount: {order['amount']} {order['currency']}"))
+        create_logged_task(admin_event(ctx.bot, "notify_purchase", f"💳 *Wallet top-up confirmed*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n💰 Amount: {order['amount']} {order['currency']}"), logger, f"request-wallet-topup-notify:{order_id}")
         try:
             await ctx.bot.send_message(user["telegram_id"], t("wallet_topup_confirmed", amount=order["amount"], balance=new_balance))
         except Exception:
@@ -154,12 +156,11 @@ async def cb_approve_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if order.get("wallet_credit_used", 0)>0:
         await db.adjust_wallet(order["user_id"], -order["wallet_credit_used"])
     from bot.handlers.admin import _credit_referral_commission
-    asyncio.create_task(_credit_referral_commission(order["user_id"], plan["price"], ctx.bot))
-    asyncio.create_task(admin_event(ctx.bot, "notify_purchase", f"💰 *Request approved*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*"))
+    create_logged_task(_credit_referral_commission(order["user_id"], plan["price"], ctx.bot), logger, f"request-referral-credit:{order_id}")
+    create_logged_task(admin_event(ctx.bot, "notify_purchase", f"💰 *Request approved*\n\n👤 {user.get('first_name','')} (`{user['telegram_id']}`)\n📦 Plan: *{plan['name']}*"), logger, f"request-approved-notify:{order_id}")
     await query.edit_message_text(f"{query.message.text}\n\n✅ Approved", reply_markup=None)
     qr_bytes = await gg.get_subscription_qr_bytes(sub_id)
     if qr_bytes:
-        import io
         await ctx.bot.send_photo(user["telegram_id"], photo=io.BytesIO(qr_bytes), caption=t("request_approved", url=sub_url), parse_mode="Markdown")
     else:
         await ctx.bot.send_message(user["telegram_id"], t("request_approved", url=sub_url), parse_mode="Markdown")
@@ -180,7 +181,7 @@ async def cb_walletpay_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["request_order_id"] = order_id
     ctx.user_data.pop("wallet_topup_amount", None)
     await query.edit_message_text(t("reason_prompt"), reply_markup=skip_kb("request:skip_reason"))
-    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) submitted a wallet top-up request"))
+    create_logged_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) submitted a wallet top-up request"), logger, f"request-wallet-payment-link-notify:{order_id}")
     return REQUEST_REASON
 
 async def cb_decline_request(update: Update, ctx: ContextTypes.DEFAULT_TYPE):

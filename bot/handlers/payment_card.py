@@ -6,11 +6,13 @@ from telegram import Update
 from telegram.ext import ContextTypes, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 import core.db as db
 from core.currency import price_for_method, fmt
+from core.tasks import create_logged_task
 from bot.strings import t
-from bot.keyboards import cancel_kb
+from bot.keyboards import cancel_kb, confirm_reject_kb
 from bot.states import CARD_WAIT_RECEIPT
 from bot.guards import ensure_force_join
 from bot.notifications import admin_event
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,7 @@ async def cb_buy_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["pending_order_id"] = order_id
     text = t("card_payment_info", price=price_str, card_number=card_number, card_holder=card_holder)
     await query.edit_message_text(text, reply_markup=cancel_kb(), parse_mode="Markdown")
-    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated card payment for plan *{plan['name']}* — {price_str}"))
+    create_logged_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated card payment for plan *{plan['name']}* — {price_str}"), logger, f"card-payment-link-notify:{order_id}")
     return CARD_WAIT_RECEIPT
 
 async def handle_receipt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -90,8 +92,6 @@ async def handle_receipt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         plan_name=plan["name"] if plan else t("wallet_topup_label"),
         amount=amount_str
     )
-    from bot.keyboards import confirm_reject_kb
-    from config import settings
     admin_ids = await db.get_all_admin_ids(settings.ADMIN_ID)
     for admin_id in admin_ids:
         try:
@@ -121,7 +121,7 @@ async def cb_walletpay_card(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.pop("wallet_topup_amount", None)
     text = t("card_payment_info", price=price_str, card_number=card_number, card_holder=card_holder)
     await query.edit_message_text(text, reply_markup=cancel_kb(), parse_mode="Markdown")
-    asyncio.create_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated card payment for wallet top-up — {price_str}"))
+    create_logged_task(admin_event(ctx.bot, "notify_payment_link", f"🔗 User *{u.first_name}* (`{u.id}`) initiated card payment for wallet top-up — {price_str}"), logger, f"card-wallet-payment-link-notify:{order_id}")
     return CARD_WAIT_RECEIPT
 
 async def cb_cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
