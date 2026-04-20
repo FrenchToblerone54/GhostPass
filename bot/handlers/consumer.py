@@ -460,12 +460,16 @@ async def cmd_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     expire_h = str(int(expire_h_val)) if expire_h_val==int(expire_h_val) else f"{expire_h_val:.1f}"
     trial_start_after_use = await db.get_setting("trial_start_after_use", "1")
     start_text = t("trial_start_from_connection") if trial_start_after_use=="1" else t("trial_start_from_get")
+    referral_required=int(await db.get_setting("trial_referral_requirement", "0") or "0")
+    referral_available=(await db.get_referral_credits(uid))["available"] if referral_required>0 else 0
+    requirement_text=t("trial_referral_requirement_line", required=referral_required, available=referral_available) if referral_required>0 else ""
+    rows=[]
+    if referral_required<=0 or referral_available>=referral_required:
+        rows.append([InlineKeyboardButton(t("btn_trial_claim"), callback_data="trial:claim")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="trial:back")])
     await update.message.reply_text(
-        t("trial_info", data_gb=data_gb, expire_h=expire_h, start_text=start_text),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton(t("btn_trial_claim"), callback_data="trial:claim")],
-            [InlineKeyboardButton(t("btn_back"), callback_data="trial:back")],
-        ]),
+        t("trial_info", data_gb=data_gb, expire_h=expire_h, start_text=start_text, requirement_text=f"\n\n{requirement_text}" if requirement_text else ""),
+        reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="Markdown"
     )
 
@@ -484,6 +488,12 @@ async def cb_trial_claim(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if await db.has_trial_claim(uid):
         await query.edit_message_text(t("trial_already_claimed"))
         return
+    referral_required=int(await db.get_setting("trial_referral_requirement", "0") or "0")
+    if referral_required>0:
+        referral_available=(await db.get_referral_credits(uid))["available"]
+        if referral_available<referral_required:
+            await query.edit_message_text(t("trial_referral_requirement_needed", required=referral_required, available=referral_available))
+            return
     data_gb = float(await db.get_setting("trial_data_gb", "0.5"))
     expire_s = int(await db.get_setting("trial_expire_seconds", "86400"))
     node_ids = json.loads(await db.get_setting("trial_node_ids", "[]"))

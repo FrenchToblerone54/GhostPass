@@ -72,6 +72,17 @@ def _migrate_v7(db):
     db.execute("PRAGMA user_version=7")
     db.commit()
 
+def _migrate_v8(db):
+    try:
+        db.execute("ALTER TABLE referral_packages ADD COLUMN sort_order INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass
+    rows=db.execute("SELECT id FROM referral_packages ORDER BY credits_required, created_at").fetchall()
+    for idx, row in enumerate(rows):
+        db.execute("UPDATE referral_packages SET sort_order=? WHERE id=?", (idx, row[0]))
+    db.execute("PRAGMA user_version=8")
+    db.commit()
+
 async def init_db():
     def _sync():
         with _open() as db:
@@ -92,6 +103,8 @@ async def init_db():
                 _migrate_v6(db)
             if version<7:
                 _migrate_v7(db)
+            if version<8:
+                _migrate_v8(db)
     await asyncio.to_thread(_sync)
 
 async def upsert_user(telegram_id, username, first_name):
@@ -589,8 +602,9 @@ async def list_admin_logs(offset=0, limit=20):
 async def create_referral_package(name, credits_required, data_gb, days, ip_limit, node_ids):
     def _sync():
         with _open() as db:
+            cnt=db.execute("SELECT COUNT(*) FROM referral_packages").fetchone()[0]
             pid=generate(size=20)
-            db.execute("INSERT INTO referral_packages (id, name, credits_required, data_gb, days, ip_limit, node_ids) VALUES (?,?,?,?,?,?,?)", (pid, name, credits_required, data_gb, days, ip_limit, json.dumps(node_ids)))
+            db.execute("INSERT INTO referral_packages (id, name, credits_required, data_gb, days, ip_limit, node_ids, sort_order) VALUES (?,?,?,?,?,?,?,?)", (pid, name, credits_required, data_gb, days, ip_limit, json.dumps(node_ids), cnt))
             db.commit()
             return pid
     return await asyncio.to_thread(_sync)
@@ -598,7 +612,7 @@ async def create_referral_package(name, credits_required, data_gb, days, ip_limi
 async def list_referral_packages(active_only=False):
     def _sync():
         with _open() as db:
-            q="SELECT * FROM referral_packages WHERE is_active=1 ORDER BY credits_required, created_at" if active_only else "SELECT * FROM referral_packages ORDER BY credits_required, created_at"
+            q="SELECT * FROM referral_packages WHERE is_active=1 ORDER BY sort_order, created_at" if active_only else "SELECT * FROM referral_packages ORDER BY sort_order, created_at"
             rows=db.execute(q).fetchall()
             result=[]
             for r in rows:
@@ -619,12 +633,69 @@ async def get_referral_package(pkg_id):
             return d
     return await asyncio.to_thread(_sync)
 
-async def update_referral_package(pkg_id, node_ids):
+async def update_referral_package(pkg_id, **kwargs):
+    allowed={"node_ids", "sort_order"}
+    fields={k: v for k, v in kwargs.items() if k in allowed}
+    if "node_ids" in fields:
+        fields["node_ids"]=json.dumps(fields["node_ids"])
+    if not fields:
+        return
+    sets=", ".join(f"{k}=?" for k in fields)
     def _sync():
         with _open() as db:
-            db.execute("UPDATE referral_packages SET node_ids=? WHERE id=?", (json.dumps(node_ids), pkg_id))
+            db.execute(f"UPDATE referral_packages SET {sets} WHERE id=?", (*fields.values(), pkg_id))
             db.commit()
     await asyncio.to_thread(_sync)
+
+async def move_plan(plan_id, direction):
+    def _sync():
+        with _open() as db:
+            rows=[dict(r) for r in db.execute("SELECT id, sort_order, created_at FROM plans ORDER BY sort_order, created_at").fetchall()]
+            if not rows:
+                return False
+            for idx, row in enumerate(rows):
+                if row["sort_order"]!=idx:
+                    db.execute("UPDATE plans SET sort_order=? WHERE id=?", (idx, row["id"]))
+                    row["sort_order"]=idx
+            current=next((idx for idx, row in enumerate(rows) if row["id"]==plan_id), -1)
+            if current==-1:
+                db.commit()
+                return False
+            target=current-1 if direction=="up" else current+1
+            if target<0 or target>=len(rows):
+                db.commit()
+                return False
+            rows[current], rows[target]=rows[target], rows[current]
+            for idx, row in enumerate(rows):
+                db.execute("UPDATE plans SET sort_order=? WHERE id=?", (idx, row["id"]))
+            db.commit()
+            return True
+    return await asyncio.to_thread(_sync)
+
+async def move_referral_package(pkg_id, direction):
+    def _sync():
+        with _open() as db:
+            rows=[dict(r) for r in db.execute("SELECT id, sort_order, created_at FROM referral_packages ORDER BY sort_order, created_at").fetchall()]
+            if not rows:
+                return False
+            for idx, row in enumerate(rows):
+                if row["sort_order"]!=idx:
+                    db.execute("UPDATE referral_packages SET sort_order=? WHERE id=?", (idx, row["id"]))
+                    row["sort_order"]=idx
+            current=next((idx for idx, row in enumerate(rows) if row["id"]==pkg_id), -1)
+            if current==-1:
+                db.commit()
+                return False
+            target=current-1 if direction=="up" else current+1
+            if target<0 or target>=len(rows):
+                db.commit()
+                return False
+            rows[current], rows[target]=rows[target], rows[current]
+            for idx, row in enumerate(rows):
+                db.execute("UPDATE referral_packages SET sort_order=? WHERE id=?", (idx, row["id"]))
+            db.commit()
+            return True
+    return await asyncio.to_thread(_sync)
 
 async def toggle_referral_package(pkg_id):
     def _sync():

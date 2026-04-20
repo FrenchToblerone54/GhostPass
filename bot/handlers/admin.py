@@ -59,7 +59,8 @@ from bot.states import (
     REF_PKG_CREATE_DAYS, REF_PKG_CREATE_IP, REF_PKG_CREATE_NODES,
     REF_PKG_EDIT_NODES, REF_PKG_BULK_NODES_PKGS, REF_PKG_BULK_NODES,
     ADMIN_BROADCAST_INPUT, SETTINGS_NOTIF_SUB_MSG,
-    ADMIN_WALLET_ADD, ADMIN_WALLET_REMOVE, SETTINGS_REF_COMMISSION_PCT
+    ADMIN_WALLET_ADD, ADMIN_WALLET_REMOVE, SETTINGS_REF_COMMISSION_PCT,
+    SETTINGS_TRIAL_REFERRAL_REQUIREMENT
 )
 from config import settings
 
@@ -320,7 +321,17 @@ async def cb_plan_detail_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"🔗 Nodes: {len(plan['node_ids'])}\n" +
         t("adm_plan_status", status=t("adm_active") if plan['is_active'] else t("adm_inactive"))
     )
-    await query.edit_message_text(text, reply_markup=plan_actions_kb(plan_id, plan["is_active"]), parse_mode="Markdown")
+    plans=await db.list_plans(active_only=False)
+    plan_ids=[p["id"] for p in plans]
+    idx=plan_ids.index(plan_id) if plan_id in plan_ids else -1
+    await query.edit_message_text(text, reply_markup=plan_actions_kb(plan_id, plan["is_active"], idx>0, idx!=-1 and idx<len(plan_ids)-1), parse_mode="Markdown")
+
+async def cb_plan_move(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    _, _, direction, plan_id=query.data.split(":", 3)
+    await db.move_plan(plan_id, direction)
+    await cb_plan_detail_admin(update, ctx)
 
 async def cb_plan_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -2445,14 +2456,17 @@ async def cb_set_trial(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     node_ids = json.loads(await db.get_setting("trial_node_ids", "[]"))
     start_after_use = await db.get_setting("trial_start_after_use", "1")=="1"
     max_claims = await db.get_setting("trial_max_claims", "0")
+    referral_required = await db.get_setting("trial_referral_requirement", "0")
     claim_count = await db.count_trial_claims()
+    requirement_status=referral_required if referral_required!="0" else t("adm_disabled")
     await query.edit_message_text(
-        t("trial_settings", status=t("adm_enabled") if enabled else t("adm_disabled"), data_gb=data_gb, expire_h=expire_h, node_count=len(node_ids))+f"\n{t('adm_trial_after_use_status', status=t('adm_enabled') if start_after_use else t('adm_disabled'))}\n🔢 Claims: {claim_count}/{max_claims if max_claims!='0' else '∞'}",
+        t("trial_settings", status=t("adm_enabled") if enabled else t("adm_disabled"), data_gb=data_gb, expire_h=expire_h, node_count=len(node_ids), requirement_text=f"\n{t('adm_trial_referral_requirement_status', required=requirement_status)}")+f"\n{t('adm_trial_after_use_status', status=t('adm_enabled') if start_after_use else t('adm_disabled'))}\n🔢 Claims: {claim_count}/{max_claims if max_claims!='0' else '∞'}",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton(t("adm_toggle_btn", status=t("adm_enabled") if enabled else t("adm_disabled")), callback_data="set:trial_toggle")],
             [InlineKeyboardButton(t("adm_trial_set_data"), callback_data="set:trial_data")],
             [InlineKeyboardButton(t("adm_trial_set_expire"), callback_data="set:trial_expire")],
             [InlineKeyboardButton(t("adm_trial_set_nodes"), callback_data="set:trial_nodes")],
+            [InlineKeyboardButton(t("adm_trial_set_referral_requirement"), callback_data="set:trial_referral_requirement")],
             [InlineKeyboardButton(t("adm_trial_set_note"), callback_data="set:trial_note")],
             [InlineKeyboardButton(t("adm_trial_set_disabled_msg"), callback_data="set:trial_disabled_msg")],
             [InlineKeyboardButton(t("adm_trial_set_max_claims"), callback_data="set:trial_max_claims")],
@@ -2601,6 +2615,25 @@ async def settings_trial_max_claims(update: Update, ctx: ContextTypes.DEFAULT_TY
         await update.message.reply_text(t("invalid_input"))
         return SETTINGS_TRIAL_MAX_CLAIMS
     await db.set_setting("trial_max_claims", str(val))
+    await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
+    return ConversationHandler.END
+
+async def cb_set_trial_referral_requirement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    current=await db.get_setting("trial_referral_requirement", "0")
+    await query.edit_message_text(t("adm_trial_referral_requirement_prompt", current=current), reply_markup=cancel_kb())
+    return SETTINGS_TRIAL_REFERRAL_REQUIREMENT
+
+async def settings_trial_referral_requirement(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        val=int(update.message.text.strip())
+        if val<0:
+            raise ValueError
+    except ValueError:
+        await update.message.reply_text(t("invalid_input"))
+        return SETTINGS_TRIAL_REFERRAL_REQUIREMENT
+    await db.set_setting("trial_referral_requirement", str(val))
     await update.message.reply_text(t("setting_saved"), reply_markup=back_kb("set:trial"))
     return ConversationHandler.END
 
@@ -3179,7 +3212,17 @@ async def cb_ref_pkg_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     data_text = t("adm_unlimited") if float(pkg["data_gb"])==0 else f"{pkg['data_gb']} GB"
     days_text = t("adm_no_expiry") if int(pkg["days"])==0 else f"{pkg['days']}d"
     ip_text = t("adm_unlimited") if int(pkg["ip_limit"])==0 else str(pkg["ip_limit"])
-    await query.edit_message_text(t("adm_referral_pkg_detail", name=pkg["name"], data_text=data_text, days_text=days_text, ip_text=ip_text, credits=pkg["credits_required"], status=t("adm_active") if pkg["is_active"] else t("adm_inactive")), reply_markup=referral_pkg_admin_kb(pkg_id, pkg["is_active"]), parse_mode="Markdown")
+    pkgs=await db.list_referral_packages(active_only=False)
+    pkg_ids=[p["id"] for p in pkgs]
+    idx=pkg_ids.index(pkg_id) if pkg_id in pkg_ids else -1
+    await query.edit_message_text(t("adm_referral_pkg_detail", name=pkg["name"], data_text=data_text, days_text=days_text, ip_text=ip_text, credits=pkg["credits_required"], status=t("adm_active") if pkg["is_active"] else t("adm_inactive")), reply_markup=referral_pkg_admin_kb(pkg_id, pkg["is_active"], idx>0, idx!=-1 and idx<len(pkg_ids)-1), parse_mode="Markdown")
+
+async def cb_ref_pkg_move(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query=update.callback_query
+    await query.answer()
+    _, _, direction, pkg_id=query.data.split(":", 3)
+    await db.move_referral_package(pkg_id, direction)
+    await cb_ref_pkg_detail(update, ctx)
 
 async def cb_ref_pkg_toggle(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -3265,7 +3308,7 @@ async def ref_pkg_edit_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE
     selected=ctx.user_data.pop("editing_ref_pkg_nodes", [])
     if not pkg_id:
         return ConversationHandler.END
-    await db.update_referral_package(pkg_id, selected)
+    await db.update_referral_package(pkg_id, node_ids=selected)
     await query.edit_message_text(t("setting_saved"), reply_markup=back_kb(f"ref_pkg:detail:{pkg_id}"))
     return ConversationHandler.END
 
@@ -3368,7 +3411,7 @@ async def ref_pkgs_bulk_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYP
     count=0
     for pkg in pkgs:
         if pkg["id"] in target_ids:
-            await db.update_referral_package(pkg["id"], selected)
+            await db.update_referral_package(pkg["id"], node_ids=selected)
             count+=1
     await query.edit_message_text(t("adm_referral_pkg_nodes_bulk_done", count=count), reply_markup=back_kb("set:referral"))
     return ConversationHandler.END
@@ -3513,6 +3556,7 @@ def get_main_conv_handler():
         SETTINGS_TRIAL_NOTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_note)],
         SETTINGS_TRIAL_DISABLED_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_disabled_msg)],
         SETTINGS_TRIAL_MAX_CLAIMS: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_max_claims)],
+        SETTINGS_TRIAL_REFERRAL_REQUIREMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_trial_referral_requirement)],
         SETTINGS_PAID_NOTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_paid_note)],
         SETTINGS_START_MSG: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_start_msg)],
         ADMIN_SUB_BULK_NOTE_SELECT: [
@@ -3638,6 +3682,7 @@ def get_main_conv_handler():
         CallbackQueryHandler(cb_set_trial_note, pattern=r"^set:trial_note$"),
         CallbackQueryHandler(cb_set_trial_disabled_msg, pattern=r"^set:trial_disabled_msg$"),
         CallbackQueryHandler(cb_set_trial_max_claims, pattern=r"^set:trial_max_claims$"),
+        CallbackQueryHandler(cb_set_trial_referral_requirement, pattern=r"^set:trial_referral_requirement$"),
         CallbackQueryHandler(cb_set_paid_note, pattern=r"^set:paid_note$"),
         CallbackQueryHandler(cb_set_start_msg, pattern=r"^set:start_msg$"),
         CallbackQueryHandler(cb_sub_bulk_note_start, pattern=r"^subs:bulk_note$"),
@@ -3658,6 +3703,7 @@ def get_handlers():
         CallbackQueryHandler(cb_adm_plans, pattern=r"^adm:plans$"),
         CallbackQueryHandler(cb_adm_plans_page, pattern=r"^adm:plans_page:(prev|next)$"),
         CallbackQueryHandler(cb_plan_detail_admin, pattern=r"^plan:detail:"),
+        CallbackQueryHandler(cb_plan_move, pattern=r"^plan:move:(up|down):"),
         CallbackQueryHandler(cb_plan_toggle, pattern=r"^plan:toggle:"),
         CallbackQueryHandler(cb_plan_delete, pattern=r"^plan:delete:"),
         CallbackQueryHandler(cb_adm_subs, pattern=r"^adm:subs$"),
@@ -3737,6 +3783,7 @@ def get_handlers():
             per_message=False,
         ),
         CallbackQueryHandler(cb_ref_pkg_detail, pattern=r"^ref_pkg:detail:"),
+        CallbackQueryHandler(cb_ref_pkg_move, pattern=r"^ref_pkg:move:(up|down):"),
         CallbackQueryHandler(cb_ref_pkg_toggle, pattern=r"^ref_pkg:toggle:"),
         CallbackQueryHandler(cb_ref_pkg_delete, pattern=r"^ref_pkg:delete:"),
         CallbackQueryHandler(cb_adm_notifications, pattern=r"^adm:notifications$"),

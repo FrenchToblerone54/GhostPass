@@ -183,15 +183,23 @@ def wallet_topup_pay_kb(amount, card_enabled, crypto_enabled, requests_enabled, 
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="wallet:panel")])
     return InlineKeyboardMarkup(rows)
 
-def plan_actions_kb(plan_id, is_active):
-    toggle_label = t("btn_deactivate") if is_active else t("btn_activate")
-    return InlineKeyboardMarkup([
+def plan_actions_kb(plan_id, is_active, can_move_up, can_move_down):
+    toggle_label=t("btn_deactivate") if is_active else t("btn_activate")
+    rows=[
         [InlineKeyboardButton(toggle_label, callback_data=f"plan:toggle:{plan_id}")],
         [InlineKeyboardButton(t("btn_edit_price"), callback_data=f"plan:edit_price:{plan_id}"), InlineKeyboardButton(t("btn_edit_name"), callback_data=f"plan:edit_name:{plan_id}")],
         [InlineKeyboardButton(t("btn_edit_nodes"), callback_data=f"plan:edit_nodes:{plan_id}")],
-        [InlineKeyboardButton(t("btn_delete"), callback_data=f"plan:delete:{plan_id}")],
-        [InlineKeyboardButton(t("btn_back"), callback_data="adm:plans")],
-    ])
+    ]
+    move_row=[]
+    if can_move_up:
+        move_row.append(InlineKeyboardButton(t("btn_move_up"), callback_data=f"plan:move:up:{plan_id}"))
+    if can_move_down:
+        move_row.append(InlineKeyboardButton(t("btn_move_down"), callback_data=f"plan:move:down:{plan_id}"))
+    if move_row:
+        rows.append(move_row)
+    rows.append([InlineKeyboardButton(t("btn_delete"), callback_data=f"plan:delete:{plan_id}")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:plans")])
+    return InlineKeyboardMarkup(rows)
 
 def order_detail_kb(order_id, status, back_cb):
     rows = []
@@ -255,14 +263,22 @@ def referral_settings_kb(enabled, packages, commission_enabled=False, commission
     rows.append([InlineKeyboardButton(t("btn_back"), callback_data="adm:settings")])
     return InlineKeyboardMarkup(rows)
 
-def referral_pkg_admin_kb(pkg_id, is_active):
+def referral_pkg_admin_kb(pkg_id, is_active, can_move_up, can_move_down):
     toggle_label=t("btn_deactivate") if is_active else t("btn_activate")
-    return InlineKeyboardMarkup([
+    rows=[
         [InlineKeyboardButton(toggle_label, callback_data=f"ref_pkg:toggle:{pkg_id}")],
         [InlineKeyboardButton(t("btn_edit_nodes"), callback_data=f"ref_pkg:edit_nodes:{pkg_id}")],
-        [InlineKeyboardButton(t("btn_delete"), callback_data=f"ref_pkg:delete:{pkg_id}")],
-        [InlineKeyboardButton(t("btn_back"), callback_data="set:referral")],
-    ])
+    ]
+    move_row=[]
+    if can_move_up:
+        move_row.append(InlineKeyboardButton(t("btn_move_up"), callback_data=f"ref_pkg:move:up:{pkg_id}"))
+    if can_move_down:
+        move_row.append(InlineKeyboardButton(t("btn_move_down"), callback_data=f"ref_pkg:move:down:{pkg_id}"))
+    if move_row:
+        rows.append(move_row)
+    rows.append([InlineKeyboardButton(t("btn_delete"), callback_data=f"ref_pkg:delete:{pkg_id}")])
+    rows.append([InlineKeyboardButton(t("btn_back"), callback_data="set:referral")])
+    return InlineKeyboardMarkup(rows)
 
 def notifications_kb(s):
     events = [
