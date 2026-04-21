@@ -305,7 +305,7 @@ async def cb_adm_plans_page(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_plan_detail_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    plan_id = query.data.split(":", 2)[2]
+    plan_id = query.data.rsplit(":", 1)[1]
     plan = await db.get_plan(plan_id)
     if not plan:
         await query.edit_message_text(t("order_not_found"))
@@ -3204,7 +3204,7 @@ async def ref_pkg_nodes_done(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def cb_ref_pkg_detail(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    pkg_id = query.data.split(":", 2)[2]
+    pkg_id = query.data.rsplit(":", 1)[1]
     pkg = await db.get_referral_package(pkg_id)
     if not pkg:
         await query.edit_message_text(t("order_not_found"), reply_markup=back_kb("set:referral"))
